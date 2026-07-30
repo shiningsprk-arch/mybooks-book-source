@@ -8,6 +8,8 @@ js_runtime — 受限的书源 JS 运行时。
 
 不支持 java.ajax / java.getString / <js> 块等外部副作用操作。
 """
+import base64 as _b64
+import hashlib as _hl
 import json
 import logging
 from urllib.parse import urlparse
@@ -37,19 +39,28 @@ def _build_globals_code(variables: dict, result: str = "", base_url: str = "") -
     if parsed.scheme and parsed.netloc:
         origin = f"{parsed.scheme}://{parsed.netloc}"
     lines.append(f'var __origin = {json.dumps(origin, ensure_ascii=False)};')
-    lines.append("""
-var java = Object.freeze({
-    get: function(key) { return ""; },
-    put: function(key, value) { return value; },
-    getString: function() { throw new Error("java.getString is not supported"); },
-    ajax: function() { throw new Error("java.ajax is not supported"); },
-    post: function() { throw new Error("java.post is not supported"); },
+    lines.append(r"""
+var __javaStore = {};
+var java = {
+    get: function(key) { return __javaStore[key] || ""; },
+    put: function(key, value) { __javaStore[key] = String(value); return value; },
+    md5Encode: function(str) {
+        var hash = dukpy_md5(String(str));
+        return hash;
+    },
+    base64Encode: function(str) {
+        var b = dukpy_b64(String(str));
+        return b;
+    },
+    log: function(msg) { dukpy_log(String(msg)); return ""; },
     longToast: function() { return ""; },
-    log: function() { return ""; },
     t2s: function(value) { return value == null ? "" : String(value); },
     s2t: function(value) { return value == null ? "" : String(value); },
-    encodeURI: function(value) { return encodeURIComponent(String(value)); }
-});
+    encodeURI: function(value) { return encodeURIComponent(String(value)); },
+    getString: function() { throw new Error("java.getString not supported"); },
+    ajax: function() { throw new Error("java.ajax not supported"); },
+    post: function() { throw new Error("java.post not supported"); },
+};
 var book = Object.freeze({
     origin: __origin,
     name: "",
@@ -57,6 +68,15 @@ var book = Object.freeze({
 });
 """)
     return "\n".join(lines)
+
+def _dukpy_md5(s):
+    return _hl.md5(s.encode()).hexdigest()
+
+def _dukpy_b64(s):
+    return _b64.b64encode(s.encode()).decode()
+
+def _dukpy_log(msg):
+    logger.info("[JS] %s", msg)
 
 
 def _get_interp(js_lib: str = "") -> dukpy.JSInterpreter:
@@ -95,6 +115,14 @@ def run_js(code: str, result: str = "", variables: dict = None,
     full_js = f"{globals_code}\n{code}"
 
     interp = _get_interp(js_lib)
+
+    # Register native callback functions
+    try:
+        interp.export_function("dukpy_md5", _dukpy_md5)
+        interp.export_function("dukpy_b64", _dukpy_b64)
+        interp.export_function("dukpy_log", _dukpy_log)
+    except Exception:
+        pass
 
     try:
         value = interp.evaljs(full_js)
