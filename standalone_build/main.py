@@ -308,17 +308,24 @@ def _search_worker(session_id, supported, keyword):
 
 
 def api_search_progress(session_id):
-    """获取搜索进度"""
+    """获取搜索进度（结果按完整度排序，有书名+链接的优先）"""
     with _session_lock:
         s = _search_sessions.get(session_id)
     if s is None:
         return {"status": "not_found"}
+    results = s["results"]
+    # 排序：有name + bookUrl 的排最前，有name的次之，其余最后
+    def _sort_key(item):
+        name = bool(item.get("name"))
+        url = bool(item.get("bookUrl"))
+        return (0 if (name and url) else 1 if name else 2, item.get("name", "") or "")
+    sorted_results = sorted(results, key=_sort_key)
     return {
         "status": s["status"],
-        "results": s["results"],
+        "results": sorted_results,
         "total": s["total"],
         "completed": s["completed"],
-        "errors": s["errors"][-5:],  # 只返回最近5个错误
+        "errors": s["errors"][-5:],
     }
 
 
@@ -351,8 +358,8 @@ def api_download(source_path, book_url, keyword, source_index=0, max_chapters=99
     toc = fetch_toc(src, book_url) or []
     chapters = []
     for i, entry in enumerate(toc[:max_chapters], 1):
-        title = entry.get("title", f"第{i}章")
-        url = entry.get("url", "")
+        title = entry.get("title") or entry.get("chapterName") or f"第{i}章"
+        url = entry.get("url") or entry.get("chapterUrl") or ""
         logger.info("下载 [%d/%d]: %s", i, min(max_chapters, len(toc)), title)
         content = fetch_content(src, url, title)
         if content:
