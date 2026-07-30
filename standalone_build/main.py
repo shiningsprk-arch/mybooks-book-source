@@ -357,13 +357,25 @@ def api_download(source_path, book_url, keyword, source_index=0, max_chapters=99
     detail = fetch_book_info(src, book_url)
     toc = fetch_toc(src, book_url) or []
     chapters = []
+    content_count = 0
     for i, entry in enumerate(toc[:max_chapters], 1):
+        if not isinstance(entry, dict):
+            logger.warning("下载 跳过非 dict 章节 #%d: %r", i, type(entry).__name__)
+            continue
         title = entry.get("title") or entry.get("chapterName") or f"第{i}章"
         url = entry.get("url") or entry.get("chapterUrl") or ""
+        if not url:
+            logger.warning("下载 章节 URL 为空: %s", title)
         logger.info("下载 [%d/%d]: %s", i, min(max_chapters, len(toc)), title)
-        content = fetch_content(src, url, title)
+        try:
+            content = fetch_content(src, url) if url else ""
+        except Exception as exc:
+            logger.warning("下载 章节内容失败 [%s]: %s", title, exc)
+            content = ""
+        chapters.append({"title": title, "content": content or "(内容获取失败)"})
         if content:
-            chapters.append({"title": title, "content": content})
+            content_count += 1
+    logger.info("下载完成: %d/%d 章有内容", content_count, len(chapters))
 
     safe_name = re.sub(r'[\\/:*?"<>|]', '_', keyword)
     output = os.path.join(os.getcwd(), f"{safe_name}.epub")
