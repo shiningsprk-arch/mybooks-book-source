@@ -953,6 +953,20 @@ def fetch_url(url: str, session=None, source=None, encoding: str = "") -> str:
     if session is None:
         session = build_source_session(source)
     hdrs = parse_source_header(getattr(source, "header", None) if source else None)
+
+    # Ensure URL is ASCII-safe (percent-encode non-ASCII chars)
+    try:
+        url.encode("ascii")
+    except UnicodeEncodeError:
+        parsed = urllib.parse.urlparse(url)
+        safe_path = urllib.parse.quote(parsed.path, safe="/%")
+        safe_query = urllib.parse.quote(parsed.query, safe="=&%")
+        safe_fragment = urllib.parse.quote(parsed.fragment, safe="")
+        url = urllib.parse.urlunparse((
+            parsed.scheme, parsed.netloc, safe_path,
+            parsed.params, safe_query, safe_fragment,
+        ))
+
     try:
         resp = session.get(url, headers=hdrs or None, timeout=30)
         resp.raise_for_status()
@@ -986,9 +1000,42 @@ def _parse_search_url(search_url_str: str, base_url: str = ""):
 def search_books(source, keyword: str, session=None) -> list[dict[str, str]]:
     if session is None:
         session = build_source_session(source)
+
+    # ── 1. 解析 searchUrl（支持 @js: 前缀） ──
     raw_search_url = source.searchUrl or source.bookSourceUrl
     url_part, options = _parse_search_url(raw_search_url)
-    search_url = render_url_template(url_part, key=keyword, page=1)
+    search_url = render_url_template(url_part, key=keyword, page=1, baseUrl=source.bookSourceUrl)
+
+    # Handle @js: searchUrl — evaluate JS to get actual URL
+    if search_url.startswith("@js:") or search_url.startswith("@js:\n"):
+        try:
+            variables = {"key": keyword, "page": 1, "baseUrl": source.bookSourceUrl}
+            evaled = extract_single(search_url, "", base_url=source.bookSourceUrl,
+                                    js_lib=source.jsLib, variables=variables)
+            if evaled:
+                search_url = evaled.strip()
+        except Exception as exc:
+            logger.warning("JS searchUrl eval failed [%s]: %s", source.bookSourceName, exc)
+            return []
+
+    # Resolve relative URLs against bookSourceUrl
+    if search_url and not search_url.startswith(("http://", "https://", "@")):
+        resolved = _resolve_url(search_url, source.bookSourceUrl)
+        if resolved != search_url:
+            search_url = resolved
+
+    # Replace Python template placeholders {{source.xxx}}
+    if "{{source." in search_url:
+        for key in ("bookSourceUrl", "bookSourceName", "bookSourceGroup"):
+            placeholder = "{{source." + key + "}}"
+            if placeholder in search_url:
+                val = getattr(source, key, "") or ""
+                search_url = search_url.replace(placeholder, val)
+
+    if not search_url:
+        logger.warning("searchUrl empty [%s]", source.bookSourceName)
+        return []
+
     charset = options.get("charset", "")
     method = str(options.get("method", "GET")).upper()
 
