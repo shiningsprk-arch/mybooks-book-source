@@ -344,6 +344,8 @@ def api_download(source_path, book_url, keyword, source_index=0, max_chapters=99
     src = load_source(source_path, source_index)
     if not src:
         return {"error": "书源无效"}
+    if not book_url:
+        return {"error": "书源未返回书籍链接，无法下载"}
 
     detail = fetch_book_info(src, book_url)
     toc = fetch_toc(src, book_url) or []
