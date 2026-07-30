@@ -18,7 +18,7 @@ from urllib.parse import urljoin, urlparse, quote as _urlquote
 # keep module-level import for backward compat
 import urllib.parse
 
-from .js_runtime import run_js, JsRuleUnsupported as _JsRuleUnsupported
+from js_runtime import run_js, JsRuleUnsupported as _JsRuleUnsupported
 
 logger = logging.getLogger(__name__)
 
@@ -676,6 +676,18 @@ def _eval_single_rule(rule, content, base_url="", js_lib="", variables=None):
         except _JsRuleUnsupported:
             return None
 
+    # {{result.fieldName}} — 直接 JSON 字段提取
+    if rule.startswith("{{") and rule.endswith("}}") and "{{{" not in rule:
+        m = re.match(r'^\{\{\s*result\.(\w+)\s*\}\}$', rule)
+        if m:
+            field_name = m.group(1)
+            try:
+                data = json.loads(content) if isinstance(content, str) else content
+                if isinstance(data, dict) and field_name in data:
+                    return str(data[field_name])
+            except (json.JSONDecodeError, TypeError):
+                pass
+
     parsed = parse_selector(rule)
     kind = parsed["type"]
     if kind == "skip":
@@ -814,6 +826,8 @@ def _extract_list_single(list_rule: str, item_rules: dict, content: str,
             elif sub_parsed["type"] == "regex":
                 m = re.search(sub_parsed["pattern"], str(container))
                 val = m.group(1) if m else None
+            elif sub_parsed["type"] == "js":
+                val = extract_single(sub_rule, str(container), base_url, js_lib, variables)
             else:
                 val = None
             item[field] = (val or "").strip()
@@ -981,6 +995,7 @@ def fetch_url(url: str, session=None, source=None, encoding: str = "") -> str:
 
 
 def _parse_search_url(search_url_str: str, base_url: str = ""):
+    """解析 searchUrl + 选项（兼容 JSON 和 Legado Python 风格 dict）"""
     rule = (search_url_str or "").strip()
     if not rule:
         return "", {}
@@ -992,6 +1007,17 @@ def _parse_search_url(search_url_str: str, base_url: str = ""):
             if isinstance(opts, dict):
                 return rule[:idx].strip(), opts
         except ValueError:
+            pass
+        # Try Legado-style with single quotes / Python bools
+        try:
+            fixed = candidate.replace("'", '"')
+            fixed = re.sub(r'(?<![:\w])True(?![:\w])', 'true', fixed)
+            fixed = re.sub(r'(?<![:\w])False(?![:\w])', 'false', fixed)
+            fixed = re.sub(r'(?<![:\w])None(?![:\w])', 'null', fixed)
+            opts = json.loads(fixed)
+            if isinstance(opts, dict):
+                return rule[:idx].strip(), opts
+        except (ValueError, KeyError):
             pass
         idx = rule.find(",{", idx + 1)
     return rule, {}
@@ -1266,7 +1292,7 @@ def fetch_content(source, chapter_url: str, session=None, max_pages: int = 20) -
             parts.append(text)
         elif content_rule and ('@js:' in content_rule or '<js>' in content_rule):
             try:
-                from .content_fallbacks import try_fetch_content
+                from content_fallbacks import try_fetch_content
                 fallback = try_fetch_content(url, source)
                 if fallback:
                     parts.append(fallback)
