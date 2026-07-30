@@ -21,8 +21,19 @@ import zipfile
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_SOURCE = os.path.join(HERE, "sources.json")
+# Determine source path: next to EXE, then Desktop, then CWD
+_EXE_DIR = os.path.dirname(os.path.abspath(__file__))
+_DESKTOP = os.path.join(os.path.expanduser("~"), "Desktop")
+for _p in [
+    os.path.join(_EXE_DIR, "sources.json"),
+    os.path.join(_DESKTOP, "sources.json"),
+    os.path.join(os.getcwd(), "sources.json"),
+]:
+    if os.path.exists(_p):
+        DEFAULT_SOURCE = _p
+        break
+else:
+    DEFAULT_SOURCE = os.path.join(_DESKTOP, "sources.json")
 
 # ── 后台搜索会话 ──
 _search_sessions: dict = {}
