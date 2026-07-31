@@ -7,7 +7,8 @@ API（全部 JSON）:
     POST /api/sources/delete  {name}          删除书源
     POST /api/sources/toggle  {name,enabled}  启用/停用书源
     POST /api/sources/import_url {url}        从订阅 URL 批量导入
-    POST /api/sources/import_zip {file_b64,filename}  从 ZIP（Legado 导出格式）批量导入
+    POST /api/sources/import_zip {file_b64,filename}  从 ZIP 批量导入（优先 importBookSource.json/txt，
+                                                      否则扫描包内所有 .json/.txt 逐个解析）
     GET  /api/sources/test?source=           同步搜索 "测试" 验证连通
     POST /api/search          {keyword}       异步多源搜索 -> task_id
     GET  /api/search/status?task_id=          搜索任务进度
@@ -473,7 +474,11 @@ class Handler(BaseHTTPRequestHandler):
                         f"导入完成：新增 {added}，更新 {updated}，跳过 {skipped}")
 
     def _import_zip(self, data):
-        """从 ZIP 压缩包导入书源（Legado 导出格式 importBookSource.json/txt）。"""
+        """从 ZIP 压缩包导入书源。
+
+        优先解析 Legado 标准导出（importBookSource.json/txt）；
+        找不到时兜底扫描包内所有 .json/.txt 文件逐个解析（每文件一个书源或数组）。
+        """
         import base64 as _b64
         import io as _io
         import zipfile as _zf
@@ -488,25 +493,49 @@ class Handler(BaseHTTPRequestHandler):
             return self._err("压缩包超过 10MB")
         try:
             with _zf.ZipFile(_io.BytesIO(raw)) as zf:
-                target = None
-                for name in zf.namelist():
-                    base = name.replace("\\", "/").rsplit("/", 1)[-1]
-                    if base in ("importBookSource.json", "importBookSource.txt"):
-                        target = name
-                        break
-                if target is None:
-                    return self._err("压缩包内未找到 importBookSource.json 或 importBookSource.txt")
-                text = zf.read(target).decode("utf-8", errors="replace")
+                names = zf.namelist()
+
+                def _base(name):
+                    return name.replace("\\", "/").rsplit("/", 1)[-1]
+
+                # 1) Legado 标准导出
+                target = next((n for n in names
+                               if _base(n) in ("importBookSource.json", "importBookSource.txt")), None)
+                if target is not None:
+                    text = zf.read(target).decode("utf-8", errors="replace")
+                    try:
+                        payload = json.loads(text)
+                    except Exception as exc:
+                        return self._err(f"书源文件 {target} JSON 解析失败：{exc}")
+                    items = payload if isinstance(payload, list) else [payload]
+                    source_files = [target]
+                else:
+                    # 2) 兜底：遍历所有 json/txt 文件
+                    items = []
+                    source_files = []
+                    for name in names:
+                        base = _base(name)
+                        if not (base.endswith(".json") or base.endswith(".txt")):
+                            continue
+                        try:
+                            payload = json.loads(zf.read(name).decode("utf-8", errors="replace"))
+                        except Exception:
+                            continue
+                        if isinstance(payload, list):
+                            items.extend(payload)
+                            source_files.append(name)
+                        elif isinstance(payload, dict):
+                            items.append(payload)
+                            source_files.append(name)
+                    if not source_files:
+                        return self._err("压缩包内未找到可解析的书源文件（.json/.txt）")
         except Exception as exc:
             return self._err(f"压缩包解析失败：{exc}")
-        try:
-            payload = json.loads(text)
-        except Exception as exc:
-            return self._err(f"书源文件 JSON 解析失败：{exc}")
-        items = payload if isinstance(payload, list) else [payload]
         added, updated, skipped = self._merge_items(items)
-        return self._ok({"added": added, "updated": updated, "skipped": skipped},
-                        f"导入完成：新增 {added}，更新 {updated}，跳过 {skipped}")
+        detail = f"（解析 {len(source_files)} 个文件）" if len(source_files) > 1 else ""
+        return self._ok({"added": added, "updated": updated, "skipped": skipped,
+                         "files": len(source_files)},
+                        f"导入完成：新增 {added}，更新 {updated}，跳过 {skipped}{detail}")
 
     def _search(self, data):
         keyword = (data.get("keyword") or "").strip()
