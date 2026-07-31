@@ -13,15 +13,25 @@
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text);
-    font: 14px/1.6 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; }
-  .topbar { background: var(--card); border-bottom: 1px solid var(--line);
-    padding: 10px 20px; display: flex; align-items: center; gap: 16px; }
-  .topbar h1 { font-size: 17px; margin: 0; font-weight: 600; }
-  .topbar .port { color: var(--muted); font-size: 12px; }
-  .tabs { display: flex; gap: 4px; margin-left: auto; }
-  .tab { padding: 7px 16px; border-radius: 8px; cursor: pointer; color: var(--muted);
-    border: 1px solid transparent; user-select: none; }
+    font: 14px/1.6 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    height: 100vh; overflow: hidden; }
+  .layout { display: flex; height: 100vh; }
+  .sidebar { width: 310px; flex: none; background: var(--card);
+    border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+  .brand { padding: 12px 16px 8px; border-bottom: 1px solid var(--line); }
+  .brand h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  .brand .port { color: var(--muted); font-size: 12px; }
+  .tabs { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; }
+  .tab { padding: 9px 14px; border-radius: 8px; cursor: pointer; color: var(--muted);
+    border: 1px solid transparent; user-select: none; font-weight: 600; }
+  .tab:hover { background: #f3f4f6; color: var(--text); }
   .tab.active { background: var(--primary); color: #fff; }
+  .side-sec { padding: 10px 16px; border-top: 1px solid var(--line); }
+  .side-sec h3 { font-size: 12px; margin: 0 0 8px; color: var(--muted); font-weight: 600;
+    text-transform: uppercase; letter-spacing: .3px; }
+  .side-tasks { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .side-tasks .tasks { flex: 1; overflow-y: auto; min-height: 0; }
+  .main { flex: 1; overflow-y: auto; min-width: 0; }
   .wrap { max-width: 1100px; margin: 16px auto; padding: 0 16px; }
   .card { background: var(--card); border: 1px solid var(--line);
     border-radius: var(--radius); padding: 14px; margin-bottom: 14px; }
@@ -57,8 +67,12 @@
   .progress > div { height: 100%; background: var(--primary); transition: width .3s; }
   .tasks { max-height: 320px; overflow-y: auto; }
   .task { padding: 8px 2px; border-bottom: 1px dashed var(--line); }
+  .task:last-child { border-bottom: none; }
   .task .t-head { display: flex; justify-content: space-between; gap: 8px; }
+  .task .t-name { font-size: 13px; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; max-width: 170px; }
   .task .t-msg { color: var(--muted); font-size: 12px; margin: 3px 0; }
+  .task .progress { margin-top: 4px; }
   .toast { position: fixed; right: 20px; bottom: 20px; z-index: 99;
     background: #111827; color: #fff; padding: 10px 16px; border-radius: 8px;
     opacity: 0; transition: opacity .25s; max-width: 60vw; }
@@ -77,87 +91,96 @@
   .hint { color: var(--muted); font-size: 12px; }
   .dl-link { color: var(--primary); font-weight: 600; }
   .err-text { color: var(--danger); font-size: 12px; margin-top: 6px; white-space: pre-wrap; }
+  #epubDir { font-size: 12px; }
+  #configHint { margin: 8px 0 0; word-break: break-all; }
 </style>
 </head>
 <body>
 
-<div class="topbar">
-  <h1>📚 书源工具</h1>
-  <span class="port" id="portTag"></span>
-  <div class="tabs">
-    <div class="tab active" data-tab="sources">书源管理</div>
-    <div class="tab" data-tab="search">搜索下载</div>
-    <div class="tab" data-tab="settings">设置</div>
-  </div>
-</div>
+<div class="layout">
 
-<div class="wrap">
-
-  <!-- ═══ 书源管理 ═══ -->
-  <div id="panel-sources">
-    <div class="card">
-      <div class="row">
-        <input type="text" id="filterSrc" placeholder="筛选书源…" style="max-width:260px">
-        <button id="btnRefresh" class="small">刷新</button>
-        <button id="btnAdd" class="primary small">＋ 新增书源</button>
-        <input type="text" id="importUrl" placeholder="书源订阅 URL…" style="max-width:340px">
-        <button id="btnImportUrl" class="small">URL 导入</button>
-        <button id="btnImportZip" class="small">ZIP 导入</button>
-        <input type="file" id="zipInput" accept=".zip" style="display:none">
-      </div>
-    </div>
-    <div class="card">
-      <table>
-        <thead><tr>
-          <th style="width:36px">启用</th><th>名称</th><th>分组</th><th>网址</th>
-          <th style="width:190px">操作</th>
-        </tr></thead>
-        <tbody id="srcTable"><tr><td colspan="5" class="empty">加载中…</td></tr></tbody>
-      </table>
-    </div>
-  </div>
-
-  <!-- ═══ 搜索下载 ═══ -->
-  <div id="panel-search" style="display:none">
-    <div class="card">
-      <div class="row">
-        <input type="text" id="keyword" placeholder="输入书名 / 作者关键词…"
-               style="max-width:420px" onkeydown="if(event.key==='Enter')doSearch()">
-        <button id="btnSearch" class="primary" onclick="doSearch()">搜索</button>
-        <span class="hint" id="searchHint"></span>
-      </div>
+  <!-- ═══ 侧边栏 ═══ -->
+  <aside class="sidebar">
+    <div class="brand">
+      <h1>📚 书源工具</h1>
+      <span class="port" id="portTag"></span>
     </div>
 
-    <div class="card" id="resultCard" style="display:none">
-      <h2>搜索结果 <span class="hint" id="resultCount"></span></h2>
-      <table>
-        <thead><tr>
-          <th style="width:44px">封面</th><th>书名</th><th>作者</th><th>来源</th>
-          <th>最新章节</th><th style="width:120px">操作</th>
-        </tr></thead>
-        <tbody id="resultTable"></tbody>
-      </table>
-    </div>
+    <nav class="tabs">
+      <div class="tab active" data-tab="search">🔍 搜索下载</div>
+      <div class="tab" data-tab="sources">📚 书源管理</div>
+    </nav>
 
-    <div class="card" id="taskCard" style="display:none">
-      <h2>任务进度</h2>
-      <div class="tasks" id="taskList"></div>
-    </div>
-  </div>
-
-  <!-- ═══ 设置 ═══ -->
-  <div id="panel-settings" style="display:none">
-    <div class="card">
-      <h2>EPUB 输出目录</h2>
-      <div class="row">
-        <input type="text" id="epubDir" placeholder="例如 D:\电子书\EPUB…" style="max-width:480px">
+    <div class="side-sec">
+      <h3>EPUB 输出目录</h3>
+      <input type="text" id="epubDir" placeholder="例如 D:\电子书\EPUB…">
+      <div class="row" style="margin-top:8px">
         <button id="btnSaveConfig" class="primary small">保存</button>
         <button id="btnResetConfig" class="small">恢复默认</button>
         <button id="btnOpenDir" class="small">打开目录</button>
       </div>
-      <p class="hint" id="configHint" style="margin-top:8px"></p>
+      <p class="hint" id="configHint"></p>
     </div>
-  </div>
+
+    <div class="side-sec side-tasks">
+      <h3>任务进度 <span id="taskCount" class="hint"></span></h3>
+      <div class="tasks" id="taskList"></div>
+    </div>
+  </aside>
+
+  <!-- ═══ 主区 ═══ -->
+  <main class="main">
+    <div class="wrap">
+
+      <!-- 搜索下载 -->
+      <div id="panel-search">
+        <div class="card">
+          <div class="row">
+            <input type="text" id="keyword" placeholder="输入书名 / 作者关键词…"
+                   style="max-width:420px" onkeydown="if(event.key==='Enter')doSearch()">
+            <button id="btnSearch" class="primary" onclick="doSearch()">搜索</button>
+            <span class="hint" id="searchHint"></span>
+          </div>
+        </div>
+
+        <div class="card" id="resultCard" style="display:none">
+          <h2>搜索结果 <span class="hint" id="resultCount"></span></h2>
+          <table>
+            <thead><tr>
+              <th style="width:44px">封面</th><th>书名</th><th>作者</th><th>来源</th>
+              <th>最新章节</th><th style="width:120px">操作</th>
+            </tr></thead>
+            <tbody id="resultTable"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- 书源管理 -->
+      <div id="panel-sources" style="display:none">
+        <div class="card">
+          <div class="row">
+            <input type="text" id="filterSrc" placeholder="筛选书源…" style="max-width:260px">
+            <button id="btnRefresh" class="small">刷新</button>
+            <button id="btnAdd" class="primary small">＋ 新增书源</button>
+            <input type="text" id="importUrl" placeholder="书源订阅 URL…" style="max-width:340px">
+            <button id="btnImportUrl" class="small">URL 导入</button>
+            <button id="btnImportZip" class="small">ZIP 导入</button>
+            <input type="file" id="zipInput" accept=".zip" style="display:none">
+          </div>
+        </div>
+        <div class="card">
+          <table>
+            <thead><tr>
+              <th style="width:36px">启用</th><th>名称</th><th>分组</th><th>网址</th>
+              <th style="width:190px">操作</th>
+            </tr></thead>
+            <tbody id="srcTable"><tr><td colspan="5" class="empty">加载中…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+  </main>
 
 </div>
 
@@ -199,7 +222,8 @@ let sources = [];
 let tasks = new Map();     // epub 任务
 let searchTask = null;
 let searchTimer = null;
-let activeTab = "sources";
+let results = new Map();   // 搜索结果 key -> {b, src}
+let activeTab = "search";
 
 function toast(msg) {
   const t = $("toast");
@@ -325,11 +349,45 @@ function importZipFile(file) {
 }
 
 /* ── 搜索 ── */
+function resultScore(b, kw) {
+  const name = (b.name || "").toLowerCase();
+  const author = (b.author || "").toLowerCase();
+  if (!kw) return 200;
+  if (name === kw) return 1000;               // 完全匹配
+  if (name.startsWith(kw)) return 800;        // 前缀匹配
+  if (name.includes(kw)) return 600;          // 包含匹配
+  if (author.includes(kw)) return 400;        // 作者匹配
+  return 200;                                 // 其余
+}
+function rowHtml(r) {
+  const b = r.b;
+  return `<tr>
+    <td>${b.coverUrl ? `<img class="cover" src="${esc(b.coverUrl)}" onerror="this.style.visibility='hidden'">` : ""}</td>
+    <td><b>${esc(b.name)}</b></td>
+    <td>${esc(b.author)}</td>
+    <td><span class="chip">${esc(r.src)}</span></td>
+    <td class="hint" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(b.lastChapter)}</td>
+    <td><button class="small primary" onclick="genEpub('${esc(r.src)}','${esc(b.bookUrl)}','${esc(b.name)}')">生成 EPUB</button></td>
+  </tr>`;
+}
+function renderResults(done, total) {
+  const kw = ($("keyword").value || "").trim().toLowerCase();
+  const arr = Array.from(results.values()).map(r => ({ r, score: resultScore(r.b, kw) }));
+  arr.sort((a, b) =>
+    b.score - a.score                                     // 相关度
+    || (a.r.b.name || "").length - (b.r.b.name || "").length  // 短书名优先
+    || (a.r.b.name || "").localeCompare(b.r.b.name || "", "zh")
+    || a.r.src.localeCompare(b.r.src));
+  $("resultTable").innerHTML = arr.map(x => rowHtml(x.r)).join("");
+  $("resultCount").textContent = `(${results.size} 条 · ${done}/${total} 源完成)`;
+  return results.size;
+}
 async function doSearch() {
   const kw = $("keyword").value.trim();
   if (!kw) { toast("请输入关键词"); return; }
   stopSearchPoll();
   searchTask = null;
+  results = new Map();
   $("resultTable").innerHTML = "";
   $("resultCard").style.display = "none";
   const r = await post("/api/search", { keyword: kw });
@@ -345,29 +403,17 @@ async function pollSearch() {
   const r = await api("/api/search/status?task_id=" + encodeURIComponent(searchTask));
   if (r.err !== "ok" || !r.data) { stopSearchPoll(); return; }
   const d = r.data;
-  const seen = new Set();
-  $("resultTable").querySelectorAll("tr").forEach(tr => seen.add(tr.dataset.key));
   (d.results || []).forEach(res => {
     (res.books || []).forEach(b => {
       const key = b.bookUrl + "|" + res.source_name;
-      if (seen.has(key)) return;
-      seen.add(key);
-      const tr = document.createElement("tr");
-      tr.dataset.key = key;
-      tr.innerHTML = `
-        <td>${b.coverUrl ? `<img class="cover" src="${esc(b.coverUrl)}" onerror="this.style.visibility='hidden'">` : ""}</td>
-        <td><b>${esc(b.name)}</b></td>
-        <td>${esc(b.author)}</td>
-        <td><span class="chip">${esc(res.source_name)}</span></td>
-        <td class="hint" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(b.lastChapter)}</td>
-        <td><button class="small primary" onclick="genEpub('${esc(res.source_name)}','${esc(b.bookUrl)}','${esc(b.name)}')">生成 EPUB</button></td>`;
-      $("resultTable").appendChild(tr);
+      if (results.has(key)) return;
+      results.set(key, { b, src: res.source_name });
     });
   });
-  $("resultCount").textContent = `(${seen.size} 条 · ${d.done}/${d.total} 源完成)`;
+  const n = renderResults(d.done, d.total);
   if (d.finished) {
     stopSearchPoll();
-    $("searchHint").textContent = `搜索完成，共 ${seen.size} 条结果（${d.done}/${d.total} 源完成）`;
+    $("searchHint").textContent = `搜索完成，共 ${n} 条结果（${d.done}/${d.total} 源完成）`;
   }
 }
 function stopSearchPoll() {
@@ -387,17 +433,21 @@ async function genEpub(source, bookUrl, name) {
   const task = { key, source, name, taskId: r.data.task_id, status: "running",
     progress: 0, message: "初始化" };
   tasks.set(key, task);
-  $("taskCard").style.display = "";
   renderTasks();
 }
 function renderTasks() {
   const box = $("taskList");
-  const arr = Array.from(tasks.values());
-  if (!arr.length) { $("taskCard").style.display = "none"; return; }
+  const arr = Array.from(tasks.values()).reverse();
+  const running = arr.filter(t => t.status === "running").length;
+  $("taskCount").textContent = running ? `(${running} 进行中)` : "";
+  if (!arr.length) {
+    box.innerHTML = '<div class="empty" style="padding:14px 0">暂无任务</div>';
+    return;
+  }
   box.innerHTML = arr.map(t => `
     <div class="task">
       <div class="t-head">
-        <b>${esc(t.name)}</b>
+        <b class="t-name" title="${esc(t.name)}">${esc(t.name)}</b>
         <span class="chip ${t.status === "done" ? "ok" : t.status === "failed" ? "bad" : ""}">${t.statusText || t.status}</span>
       </div>
       <div class="t-msg">${esc(t.message)}</div>
@@ -425,23 +475,19 @@ async function pollEpubTasks() {
       t.status = "cancelled"; t.statusText = "已取消";
     }
   }
-  if (!Array.from(tasks.values()).some(t => t.status === "running")) {
-    renderTasks();
-    return;
-  }
   renderTasks();
 }
 setInterval(pollEpubTasks, 1000);
 
-/* ── 设置 ── */
+/* ── 设置（EPUB 输出目录） ── */
 async function loadConfig() {
   const r = await api("/api/config");
   if (r.err !== "ok") return;
   const d = r.data;
   $("epubDir").value = d.epub_dir || "";
   $("configHint").textContent = d.is_custom
-    ? `自定义输出目录：${d.epub_dir}（数据目录：${d.data_dir}）`
-    : `默认输出目录：${d.epub_dir}（数据目录：${d.data_dir}）。输入路径并保存即可自定义。`;
+    ? `当前：${d.epub_dir}`
+    : `默认：${d.epub_dir}`;
 }
 async function saveConfig() {
   const epubDir = $("epubDir").value.trim();
@@ -469,9 +515,8 @@ document.querySelectorAll(".tab").forEach(tab => {
     document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
     tab.classList.add("active");
     activeTab = tab.dataset.tab;
-    $("panel-sources").style.display = activeTab === "sources" ? "" : "none";
     $("panel-search").style.display = activeTab === "search" ? "" : "none";
-    $("panel-settings").style.display = activeTab === "settings" ? "" : "none";
+    $("panel-sources").style.display = activeTab === "sources" ? "" : "none";
   });
 });
 
@@ -492,6 +537,7 @@ document.querySelectorAll(".tab").forEach(tab => {
   $("btnOpenDir").addEventListener("click", openDir);
   await loadSources();
   await loadConfig();
+  renderTasks();
   // 关闭弹窗：点遮罩
   $("srcModal").addEventListener("click", e => {
     if (e.target === $("srcModal")) closeSrcModal();

@@ -248,3 +248,16 @@ ormalize_content_text\, adapted from talebook cleaner) |
 ### 验证
 - 119 单测全过；dev 模式 API 冒烟（config 设置/恢复、maxChapters=abc → 200 且按默认值启任务、epub 输出目录 resolve 持久化）。
 - 冻结 exe 重建并实测：config / sources / sources/test / curl_cffi backend 全部正常。
+
+## Round 2026-07-31 (4) — 桌面 UI 改版：侧边栏 + 默认搜索页 + 结果排序
+
+| Area | Change |
+| --- | --- |
+| desktop/web/index.html | 布局改为「左侧边栏 + 主区」：侧边栏含导航（搜索下载 / 书源管理）、EPUB 输出目录设置（保存/恢复默认/打开目录，默认页即可改）、任务进度列表（始终可见）；原「设置」页并入侧边栏删除 |
+| desktop/web/index.html | 对调「书源管理」与「搜索下载」顺序，默认打开「搜索下载」 |
+| desktop/web/index.html | 搜索结果按相关度排序：书名完全匹配 > 前缀匹配 > 包含匹配 > 作者匹配 > 其余；同级按书名长度短者优先、中文 locale 排序、来源名稳定排序，并随轮询实时重排 |
+
+### 验证
+- 119 单测全过；node 语法检查 + 排序逻辑单测（斗破苍穹 → 完全匹配 1000 > 番外 800 > 新斗破 600 > 无关书 200）。
+- dev 模式冒烟：config 设置/持久化/恢复正常（PowerShell 中文 body 编码问题为测试脚本自身问题，Python 直连验证通过）。
+- 冻结 exe 重建（40.6MB）实测：新 UI markers 全部命中、设置面板已移除、多源搜索流式返回正常。
