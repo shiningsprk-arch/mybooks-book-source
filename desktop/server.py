@@ -285,10 +285,14 @@ class Handler(BaseHTTPRequestHandler):
     def _send_file(self, path: str):
         with open(path, "rb") as f:
             data = f.read()
+        fname = os.path.basename(path)
+        ascii_name = fname.encode("ascii", "ignore").decode("ascii").strip() or "download.epub"
+        quoted = urllib.parse.quote(fname, safe="")
         self.send_response(200)
         self.send_header("Content-Type", "application/epub+zip")
+        # 中文文件名经 latin-1 头编码会 500，必须给 ASCII 兜底 + RFC 5987 filename*
         self.send_header("Content-Disposition",
-                         f'attachment; filename="{os.path.basename(path)}"')
+                         f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{quoted}')
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)

@@ -261,3 +261,13 @@ ormalize_content_text\, adapted from talebook cleaner) |
 - 119 单测全过；node 语法检查 + 排序逻辑单测（斗破苍穹 → 完全匹配 1000 > 番外 800 > 新斗破 600 > 无关书 200）。
 - dev 模式冒烟：config 设置/持久化/恢复正常（PowerShell 中文 body 编码问题为测试脚本自身问题，Python 直连验证通过）。
 - 冻结 exe 重建（40.6MB）实测：新 UI markers 全部命中、设置面板已移除、多源搜索流式返回正常。
+
+## Round 2026-07-31 (5) — FIX: 下载 EPUB 报 latin-1 codec 500
+
+| Area | Change |
+| --- | --- |
+| desktop/server.py | FIX: `_send_file` 的 `Content-Disposition` 直接拼中文文件名（书名），http.server 以 latin-1 编码响应头导致 `'latin-1' codec can't encode...` 整页 500。改为 ASCII 兜底 `filename="…"` + RFC 5987 `filename*=UTF-8''…`（percent 编码），中文名浏览器正常显示 |
+
+### 验证
+- 单测直连 `_send_file`（中文文件名 epub）：响应头全部 ASCII 可解码，`Content-Disposition: attachment; filename="__abcd1234.epub"; filename*=UTF-8''%E6%96%97%E7%A0%B4…`，正文完整，latin-1 不再炸。
+- 119 单测全过；冻结 exe 重建（40.6MB）页面/配置正常；v0.1.0 Release 资产已替换为修复版。
