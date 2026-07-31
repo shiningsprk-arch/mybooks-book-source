@@ -98,10 +98,17 @@ def main():
     # Step 6: 导入 Calibre（可选）
     try:
         import subprocess
-        calibre_path = r"C:\Program Files\Calibre2\calibredb.exe"
-        if os.path.exists(calibre_path):
+        calibre_bin = os.environ.get("CALIBRE_BIN", "") or r"C:\Program Files\Calibre2\calibredb.exe"
+        if not os.path.exists(calibre_bin):
+            for candidate in (r"C:\Program Files\Calibre2\calibredb.exe",
+                              r"C:\Program Files (x86)\Calibre2\calibredb.exe",
+                              "/usr/bin/calibredb", "/opt/calibre/calibredb"):
+                if os.path.exists(candidate):
+                    calibre_bin = candidate
+                    break
+        if os.path.exists(calibre_bin):
             subprocess.run(
-                [calibre_path, "add", result],
+                [calibre_bin, "add", result],
                 capture_output=True, timeout=30,
             )
             logger.info("已导入 Calibre")

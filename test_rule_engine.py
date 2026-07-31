@@ -451,6 +451,11 @@ class TestExtractSingle(unittest.TestCase):
         result = extract_single("/书名(.)/", HTML_BOOK_LIST)
         self.assertEqual(result, "A")
 
+    def test_and_concat(self):
+        """&& 组合符直接拼接，无分隔符"""
+        result = extract_single("h3.title@text&&p.author@text", HTML_BOOK_LIST)
+        self.assertEqual(result, "书名A作者A")
+
     def test_jsonpath_rule(self):
         result = extract_single("$.total", json.dumps(JSON_BOOK_LIST))
         self.assertEqual(result, "2")
@@ -723,6 +728,7 @@ class MockResp:
     """模拟 requests.Response。"""
     status_code = 200
     apparent_encoding = "utf-8"
+    encoding = ""
 
     def __init__(self, text):
         self.text = text
@@ -811,6 +817,38 @@ class TestFullFlow(unittest.TestCase):
             self.assertIsNotNone(content)
             if content:
                 self.assertIn("正文第一段", content)
+
+    def test_fetch_content_with_source_regex(self):
+        """sourceRegex 先从页面源码截取正文片段"""
+        source = self.source
+        source.ruleContent = RuleContent(
+            content="p@text",
+            sourceRegex=r'<div id="content">([\s\S]*?)</div>',
+        )
+        with self._mock_session(HTML_CONTENT):
+            content = fetch_content(source, "/c/1")
+            self.assertIn("正文第一段", content)
+
+    def test_fetch_toc_is_volume_flag(self):
+        """卷头行 isVolume 规则正确标记"""
+        html = (
+            '<div id="list"><dl>'
+            '<dd><span class="vol">第一卷</span><a href="/v/1">第一卷</a></dd>'
+            '<dd><a href="/c/1">第一章</a></dd>'
+            '</dl></div>'
+        )
+        source = self.source
+        source.ruleToc = RuleToc(
+            chapterList="#list dd",
+            chapterName="a@text",
+            chapterUrl="a@href",
+            isVolume="class.vol@text",
+        )
+        with self._mock_session(html):
+            toc = fetch_toc(source, "/book/1")
+            self.assertEqual(len(toc), 2)
+            self.assertEqual(toc[0].get("isVolume"), "第一卷")
+            self.assertEqual(toc[1].get("isVolume"), "")
 
 
 # ═════════════════════════════════════════════════════════════════

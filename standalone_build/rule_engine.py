@@ -18,7 +18,10 @@ from urllib.parse import urljoin, urlparse, quote as _urlquote
 # keep module-level import for backward compat
 import urllib.parse
 
-from js_runtime import run_js, JsRuleUnsupported as _JsRuleUnsupported
+try:
+    from .js_runtime import run_js, JsRuleUnsupported as _JsRuleUnsupported
+except ImportError:  # standalone 运行（CLI / PyInstaller）
+    from js_runtime import run_js, JsRuleUnsupported as _JsRuleUnsupported
 
 logger = logging.getLogger(__name__)
 
@@ -766,7 +769,7 @@ def extract_single(rule: str, content: str, base_url: str = "",
             if val:
                 parts.append(val)
         if parts:
-            return "\n".join(p for p in parts if p)
+            return "".join(p for p in parts if p)
     return None
 
 
@@ -989,7 +992,8 @@ def fetch_url(url: str, session=None, source=None, encoding: str = "") -> str:
         raise
     if encoding:
         resp.encoding = encoding
-    elif resp.apparent_encoding:
+    elif not resp.encoding or resp.encoding.lower() in ("iso-8859-1", "iso8859-1"):
+        # 服务端未声明 charset 时才用 apparent_encoding 猜测，避免覆盖已声明编码
         resp.encoding = resp.apparent_encoding
     return resp.text
 
@@ -1280,6 +1284,17 @@ def fetch_content(source, chapter_url: str, session=None, max_pages: int = 20) -
 
         html = fetch_url(url, session=session)
 
+        # sourceRegex: 先按正则从页面源码中截取正文片段（Legado 兼容）
+        if rule.sourceRegex:
+            try:
+                m = re.search(rule.sourceRegex, html)
+                if m:
+                    matched = m.group(1) if m.lastindex else m.group(0)
+                    if matched:
+                        html = matched
+            except re.error as exc:
+                logger.warning("sourceRegex error: %s — %s", rule.sourceRegex, exc)
+
         content_for_rules = html
         if init_rule:
             init_val = extract_single(init_rule, html, source.bookSourceUrl, source.jsLib, variables)
@@ -1292,12 +1307,15 @@ def fetch_content(source, chapter_url: str, session=None, max_pages: int = 20) -
             parts.append(text)
         elif content_rule and ('@js:' in content_rule or '<js>' in content_rule):
             try:
+                from .content_fallbacks import try_fetch_content
+            except ImportError:
                 from content_fallbacks import try_fetch_content
+            try:
                 fallback = try_fetch_content(url, source)
                 if fallback:
                     parts.append(fallback)
-            except ImportError:
-                pass
+            except Exception as exc:
+                logger.warning("content fallback failed: %s — %s", url, exc)
 
         # 翻页
         if next_rule:

@@ -269,7 +269,10 @@ class BookSourceTool(BaseTool):
             }
 
         try:
-            resp = requests.get(probe_url, timeout=timeout, allow_redirects=True, stream=True)
+            resp = requests.get(probe_url, timeout=timeout, allow_redirects=True, stream=True,
+                                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                                       "Chrome/125.0.0.0 Safari/537.36"})
             resp.close()
             network_tags.append("connect-ok")
             network_tags.append("http-%s" % resp.status_code)
@@ -490,6 +493,8 @@ class BookSourceTool(BaseTool):
                 break
             _time.sleep(0.5)
         status = svc.get_status(task_id) or {}
+        if not status.get("finished"):
+            logger.warning("search_all 超时（%ds），返回部分结果 %d 条", timeout, len(status.get("results", [])))
         books = []
         for r in status.get("results", []):
             for b in r.get("books", []):
@@ -572,7 +577,8 @@ class BookSourceTool(BaseTool):
         cover_url = detail.get("coverUrl", "")
 
         toc = fetch_toc(source, book_url)
-        to_download = toc[:max_chapters]
+        # 卷头行（isVolume 为真）不是实际章节，跳过
+        to_download = [e for e in toc if not e.get("isVolume")][:max_chapters]
 
         chapters = []
         for i, entry in enumerate(to_download, 1):
@@ -581,6 +587,9 @@ class BookSourceTool(BaseTool):
             content = fetch_content(source, ch_url)
             if content:
                 chapters.append({"title": ch_title, "content": content, "url": ch_url})
+
+        if not chapters:
+            raise ValueError(_("未获取到有效章节内容"))
 
         # 生成 EPUB
         safe_name = re.sub(r'[\\/:*?"<>|]', '_', title)
@@ -629,7 +638,8 @@ class BookSourceTool(BaseTool):
 
         self.update_task_progress(task_id, 15, {"status": _("获取目录")})
         toc = fetch_toc(source, book_url)
-        to_download = toc[:max_chapters]
+        # 卷头行（isVolume 为真）不是实际章节，跳过
+        to_download = [e for e in toc if not e.get("isVolume")][:max_chapters]
 
         chapters = []
         total = len(to_download)
@@ -644,6 +654,9 @@ class BookSourceTool(BaseTool):
             content = fetch_content(source, ch_url)
             if content:
                 chapters.append({"title": ch_title, "content": content, "url": ch_url})
+
+        if not chapters:
+            raise ValueError(_("未获取到有效章节内容"))
 
         self.update_task_progress(task_id, 90, {"status": _("生成 EPUB")})
         work_dir = self.get_work_dir(book_url)

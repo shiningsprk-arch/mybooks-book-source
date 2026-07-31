@@ -341,6 +341,8 @@ export default {
       downloadingAll: false,
       downloadingMap: {},
       pollTimer: null,
+      searchTimer: null,
+      activeTask: null,
 
       sources: [],
       sLoading: false,
@@ -392,6 +394,7 @@ export default {
   },
   beforeDestroy() {
     if (this.pollTimer) clearInterval(this.pollTimer);
+    if (this.searchTimer) clearInterval(this.searchTimer);
   },
   methods: {
     async loadSources() {
@@ -590,26 +593,65 @@ export default {
         return;
       }
       try {
-        for (const src of enabled) {
-          const rsp = await this.$backend(
-            '/toolbox/book_source/search?source=' + encodeURIComponent(src.bookSourceName)
-            + '&keyword=' + encodeURIComponent(this.keyword)
-          );
-          if (rsp.err === 'ok' && rsp.data) {
-            rsp.data.forEach(b => {
-              this.searchResults.push({ ...b, sourceName: src.bookSourceName });
-            });
-          }
+        const rsp = await this.$backend('/toolbox/book_source/search_async', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ keyword: this.keyword }),
+        });
+        if (rsp.err === 'ok' && rsp.data && rsp.data.task_id) {
+          this.pollSearch(rsp.data.task_id);
+        } else {
+          this.showMsg(rsp.msg || this.$t('bookSource.searchFailed'), 'error');
+          this.searching = false;
         }
       } catch (e) {
         this.showMsg(this.$t('bookSource.searchFailed') + ': ' + String(e), 'error');
+        this.searching = false;
+      }
+    },
+
+    async pollSearch(taskId) {
+      if (this.searchTimer) clearInterval(this.searchTimer);
+      this.searchTimer = setInterval(async () => {
+        try {
+          const rsp = await this.$backend(
+            '/toolbox/book_source/search_status?task_id=' + encodeURIComponent(taskId)
+          );
+          if (rsp.err !== 'ok' || !rsp.data) {
+            this.stopSearchPoll();
+            return;
+          }
+          const d = rsp.data;
+          const seen = new Set(this.searchResults.map(b => b.bookUrl + '|' + b.sourceName));
+          (d.results || []).forEach(r => {
+            (r.books || []).forEach(b => {
+              const key = b.bookUrl + '|' + r.source_name;
+              if (!seen.has(key)) {
+                seen.add(key);
+                this.searchResults.push({ ...b, sourceName: r.source_name });
+              }
+            });
+          });
+          if (d.finished) this.stopSearchPoll();
+        } catch { /* 轮询错误继续 */ }
+      }, 1500);
+    },
+
+    stopSearchPoll() {
+      if (this.searchTimer) {
+        clearInterval(this.searchTimer);
+        this.searchTimer = null;
       }
       this.searching = false;
     },
 
     async downloadBook(book) {
+      if (this.activeTask) {
+        this.showMsg(this.$t('bookSource.downloadBusy'), 'error');
+        return false;
+      }
       const taskKey = book.bookUrl + '|' + book.sourceName;
-      if (this.downloadingMap[taskKey]) return;
+      if (this.downloadingMap[taskKey]) return false;
       const task = { name: book.name, source: book.sourceName, progress: 0, status: 'started', msg: this.$t('bookSource.taskStarting') };
       this.tasks.push(task);
       this.$set(this.downloadingMap, taskKey, true);
@@ -625,22 +667,42 @@ export default {
           }),
         });
         if (rsp.err === 'ok') {
+          this.activeTask = task;
           this.startPoll(task);
-        } else {
-          task.status = 'error';
-          task.msg = rsp.msg || this.$t('bookSource.downloadFailed');
+          return true;
         }
+        task.status = 'error';
+        task.msg = rsp.msg || this.$t('bookSource.downloadFailed');
+        return false;
       } catch (e) {
         task.status = 'error';
         task.msg = String(e);
+        return false;
+      } finally {
+        this.$delete(this.downloadingMap, taskKey);
       }
-      this.$delete(this.downloadingMap, taskKey);
+    },
+
+    async downloadAndWait(book) {
+      const ok = await this.downloadBook(book);
+      if (!ok) return;
+      await this.waitActiveTask();
+    },
+
+    waitActiveTask() {
+      return new Promise(resolve => {
+        const check = () => {
+          if (!this.activeTask) resolve();
+          else setTimeout(check, 2000);
+        };
+        check();
+      });
     },
 
     async downloadAll() {
       this.downloadingAll = true;
       for (const book of this.searchResults) {
-        await this.downloadBook(book);
+        await this.downloadAndWait(book);
       }
       this.downloadingAll = false;
     },
@@ -655,14 +717,12 @@ export default {
             const pd = rsp.data.progress_data;
             task.msg = (pd && pd.status) || '';
             if (rsp.data.status === 'completed') {
-              clearInterval(this.pollTimer);
-              this.pollTimer = null;
+              this.stopPoll();
               task.status = 'done';
               task.progress = 100;
               task.msg = this.$t('bookSource.taskDone');
             } else if (rsp.data.status === 'failed') {
-              clearInterval(this.pollTimer);
-              this.pollTimer = null;
+              this.stopPoll();
               task.status = 'error';
               task.msg = rsp.msg || this.$t('bookSource.taskFailed');
             }
@@ -672,11 +732,18 @@ export default {
               task.progress = 100;
               task.msg = this.$t('bookSource.taskDone');
             }
-            clearInterval(this.pollTimer);
-            this.pollTimer = null;
+            this.stopPoll();
           }
         } catch { /* polling error, continue */ }
       }, 2000);
+    },
+
+    stopPoll() {
+      if (this.pollTimer) {
+        clearInterval(this.pollTimer);
+        this.pollTimer = null;
+      }
+      this.activeTask = null;
     },
 
     async importZip(e) {
