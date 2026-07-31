@@ -441,29 +441,102 @@ class Handler(BaseHTTPRequestHandler):
             return self._err(f"打开目录失败：{exc}")
 
     def _config_pick(self):
-        """弹原生文件夹选择对话框，返回选中路径（取消返回 cancelled）。"""
-        import subprocess
-        script = (
-            "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;"
-            "Add-Type -AssemblyName System.Windows.Forms;"
-            "$d = New-Object System.Windows.Forms.FolderBrowserDialog;"
-            "$d.Description = '\u9009\u62e9 EPUB \u8f93\u51fa\u76ee\u5f55';"
-            "$d.ShowNewFolderButton = $true;"
-            "if ($args[0]) { $d.SelectedPath = $args[0] };"
-            "if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK)"
-            " { Write-Output $d.SelectedPath }"
-        )
+        """弹原生文件夹选择对话框（进程内 Win32 IFileDialog，同 os.startfile 一样无子进程）。"""
+        return self._ok(self._pick_folder(), "ok")
+
+    @staticmethod
+    def _pick_folder():
+        """返回 dict: {'path': str|None, 'cancelled': bool}；失败抛异常由调用方转 500。"""
+        import ctypes
+        from ctypes import wintypes
+
+        SIGDN_FILESYSPATH = 0x80058000
+        FOS_PICKFOLDERS = 0x20
+        CLSCTX_INPROC_SERVER = 0x1
+        S_OK = 0
+        E_CANCEL = ctypes.c_long(0x800704C7).value  # HRESULT_FROM_WIN32(ERROR_CANCELLED)，ctypes 返回有符号
+
+        class GUID(ctypes.Structure):
+            _fields_ = [("Data1", ctypes.c_ulong), ("Data2", ctypes.c_ushort),
+                        ("Data3", ctypes.c_ushort), ("Data4", ctypes.c_ubyte * 8)]
+
+        IID_IFileOpenDialog = GUID(0xD57C7288, 0xD4AD, 0x4768,
+                                   (0xBE, 0x02, 0x9D, 0x96, 0x95, 0x32, 0xD9, 0x60))
+        CLSID_FileOpenDialog = GUID(0xDC1C5A9C, 0xE88A, 0x4DDE,
+                                    (0xA5, 0xA1, 0x60, 0xF8, 0x2A, 0x20, 0xAE, 0xF7))
+        IID_IShellItem = GUID(0x43826d1e, 0xe718, 0x42ee,
+                              (0xbc, 0x55, 0xa1, 0xe2, 0x61, 0xc3, 0x7b, 0xfe))
+
+        ole32 = ctypes.windll.ole32
+        shell32 = ctypes.windll.shell32
+        ole32.CoInitialize(None)
+        ole32.CoCreateInstance.restype = ctypes.c_long
+        ole32.CoCreateInstance.argtypes = [ctypes.POINTER(GUID), wintypes.LPVOID,
+                                           wintypes.DWORD, ctypes.POINTER(GUID),
+                                           ctypes.POINTER(ctypes.c_void_p)]
+        shell32.SHCreateItemFromParsingName.restype = ctypes.c_long
+        shell32.SHCreateItemFromParsingName.argtypes = [wintypes.LPCWSTR, wintypes.LPVOID,
+                                                        ctypes.POINTER(GUID),
+                                                        ctypes.POINTER(ctypes.c_void_p)]
+        ole32.CoTaskMemFree.restype = None
+        ole32.CoTaskMemFree.argtypes = [wintypes.LPVOID]
+
+        def method(com_obj, index, *argtypes):
+            tbl = ctypes.cast(com_obj, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p)))
+            return ctypes.cast(tbl[0][index],
+                               ctypes.CFUNCTYPE(ctypes.c_long, ctypes.c_void_p, *argtypes))
+
+        pfd = ctypes.c_void_p()
+        hr = ole32.CoCreateInstance(ctypes.byref(CLSID_FileOpenDialog), None,
+                                    CLSCTX_INPROC_SERVER, ctypes.byref(IID_IFileOpenDialog),
+                                    ctypes.byref(pfd))
+        if hr != S_OK:
+            raise RuntimeError(f"创建文件夹对话框失败 (HRESULT {hr:#x})")
         try:
-            proc = subprocess.run(
-                ["powershell", "-NoProfile", "-STA", "-Command", script,
-                 str(get_books_dir())],
-                capture_output=True, timeout=180)
-        except Exception as exc:
-            return self._err(f"选择目录失败：{exc}")
-        path = proc.stdout.decode("utf-8", "replace").strip()
-        if not path:
-            return self._ok({"path": None, "cancelled": True}, "已取消选择")
-        return self._ok({"path": path, "cancelled": False})
+            # SetOptions(FOS_PICKFOLDERS)
+            hr = method(pfd, 9, wintypes.DWORD)(pfd, FOS_PICKFOLDERS)
+            if hr != S_OK:
+                raise RuntimeError(f"对话框选项设置失败 (HRESULT {hr:#x})")
+            # SetTitle
+            hr = method(pfd, 17, wintypes.LPCWSTR)(pfd, "选择 EPUB 输出目录")
+            if hr != S_OK:
+                raise RuntimeError(f"对话框标题设置失败 (HRESULT {hr:#x})")
+            # SetFolder(当前输出目录)——SetFolder 始终生效，覆盖对话框记住的上次位置
+            psi = ctypes.c_void_p()
+            hr = shell32.SHCreateItemFromParsingName(str(get_books_dir()), None,
+                                                     ctypes.byref(IID_IShellItem),
+                                                     ctypes.byref(psi))
+            if hr == S_OK and psi.value:
+                try:
+                    method(pfd, 12, ctypes.c_void_p)(pfd, psi)
+                finally:
+                    method(psi, 2)(psi)
+            # Show(无 owner，像 os.startfile 一样直接调用原生 API)
+            hr = method(pfd, 3, wintypes.HWND)(pfd, None)
+            if hr == E_CANCEL:
+                return {"path": None, "cancelled": True}
+            if hr != S_OK:
+                raise RuntimeError(f"文件夹对话框异常 (HRESULT {hr:#x})")
+            ps_result = ctypes.c_void_p()
+            hr = method(pfd, 20, ctypes.POINTER(ctypes.c_void_p))(pfd, ctypes.byref(ps_result))
+            if hr != S_OK or not ps_result.value:
+                return {"path": None, "cancelled": True}
+            try:
+                pwstr = ctypes.c_void_p()
+                hr = method(ps_result, 5, wintypes.DWORD,
+                            ctypes.POINTER(ctypes.c_void_p))(ps_result, SIGDN_FILESYSPATH,
+                                                             ctypes.byref(pwstr))
+                if hr != S_OK or not pwstr.value:
+                    return {"path": None, "cancelled": True}
+                try:
+                    path = ctypes.cast(pwstr, wintypes.LPWSTR).value or ""
+                finally:
+                    ole32.CoTaskMemFree(pwstr)
+            finally:
+                method(ps_result, 2)(ps_result)
+            return {"path": path, "cancelled": False}
+        finally:
+            method(pfd, 2)(pfd)
 
     def _search_status(self):
         task_id = self._q1("task_id")

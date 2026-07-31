@@ -284,3 +284,14 @@ ormalize_content_text\, adapted from talebook cleaner) |
 - PowerShell 对话框脚本构造/初始路径传递正常；真实弹窗可打开（实测进程存活）。
 - monkeypatch `subprocess.run` 直测 `_config_pick`：选中路径/取消两种分支 JSON 均正确（UTF-8 中文路径往返无损）。
 - node 语法检查 + 119 单测全过；冻结 exe 重建（40.6MB）页面含新按钮，config 正常。
+
+## Round 2026-07-31 (7) — FIX: 选择文件夹对话框不弹出
+
+| Area | Change |
+| --- | --- |
+| desktop/server.py | FIX: 原实现 spawn PowerShell `FolderBrowserDialog`（子进程 + .NET Add-Type），冻结 exe 环境下对话框窗口根本不出现（实测子进程存活但 MainWindowTitle 为空）。改为进程内原生 Win32 `IFileDialog`（ctypes COM 直调，同 `os.startfile` 一样无子进程）：`FOS_PICKFOLDERS` + 自定义标题 + `SetFolder` 初始目录 + `GetResult`/`GetDisplayName(SIGDN_FILESYSPATH)` + `CoTaskMemFree` |
+| desktop/server.py | 修两处坑：IShellItem IID 应为 `43826d1e-e718-42ee-bc55-a1e261c37bfe`（误写 bc45-…e977 导致 E_NOINTERFACE）；HRESULT 用有符号 `c_long` 比较（E_CANCEL = 0x800704C7 需转有符号）；`SetDefaultFolder` 在有历史状态时不生效 → 改 `SetFolder` |
+
+### 验证
+- 真实弹窗实测：对话框出现（标题「选择 EPUB 输出目录」），取消 → `cancelled:true`；确认 → 返回默认输出目录 `C:\Users\plague doctor\.mybooks_book_source\books`；冻结 exe 同流程复测通过。
+- 119 单测全过；冻结 exe 重建（40.6MB）冒烟正常。
