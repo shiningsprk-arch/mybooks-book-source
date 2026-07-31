@@ -39,6 +39,7 @@ def main():
     print("  MyBooks 书源工具（桌面版）")
     print(f"  地址:  {url}")
     print(f"  数据:  {server.DATA_DIR}")
+    print(f"  EPUB: {server.get_books_dir()}")
     print("  按 Ctrl+C 退出")
     print("=" * 56)
 

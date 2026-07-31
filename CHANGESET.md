@@ -201,3 +201,34 @@ print('validate:', t.validate_source({'bookSourceName':'test','bookSourceUrl':'h
 ```
 
 Expected: 109 tests pass, all new methods functional.
+
+---
+
+## Round 2026-07-31 �� Anti-scrape layer + Configurable EPUB output dir
+
+| Area | Change |
+| --- | --- |
+| rule_engine.py | UA rotation pool (\_UA_POOL\ + \_pick_ua\), browser-style headers (Sec-Fetch-*, Accept-Encoding), jittered throttle (\MYBOOKS_FETCH_JITTER\), status-aware retry (\_do_http\: 429 Retry-After / 403+5xx backoff + UA rotate), proxy support (\MYBOOKS_PROXY\), optional curl_cffi Chrome TLS impersonation (\MYBOOKS_HTTP_BACKEND\), chardet-based decode (\_response_text\), zero-width char cleanup (\
+ormalize_content_text\, adapted from talebook cleaner) |
+| epub_helper.py | Reuse anti-scrape session via \uild_source_session\; shared \_browser_headers\; \_make_session\ |
+| content_fallbacks.py | Reuse \uild_source_session\ in \	ry_fetch_content\ |
+| desktop/server.py | \config.json\ persistence, \get_books_dir()\, GET/POST \/api/config\, \/api/config/open\ (open folder in Explorer) |
+| desktop/web/index.html | New ���� tab: EPUB ���Ŀ¼ input + save / reset / open |
+| README.md | NEW �� project doc + anti-scrape env vars + BSD-2 attribution to talebook |
+| test_rule_engine.py | +8 tests (UA pool, session headers, retry on 429, declared encoding, zero-width normalization) �� 117 total |
+
+---
+
+## Round 2026-07-31 (2) — PyInstaller spec fixes + backend logging
+
+| Area | Change |
+| --- | --- |
+| mybooks-book-source-app.spec | Fix relative paths (build from any CWD): `ROOT = SPECPATH`, absolute `pathex`/`datas`. curl_cffi bundled via `collect_all` (`_wrapper.pyd` as EXTENSION + dist-info). Verified in final EXE TOC. |
+| rule_engine.py | `_new_session()` now logs selected backend (`HTTP backend: curl_cffi (Chrome TLS 指纹)` / `requests`) — proves frozen app loads curl_cffi. |
+| Build command | `python -m PyInstaller --noconfirm --clean <spec>` — do NOT pass `--onefile/--console/--name` (spec already has them). |
+
+### Packaging verification (frozen exe)
+- `/api/config` GET/POST (set custom epub_dir, persist, re-read) OK.
+- `/api/sources` returns 3 sources.
+- Forced `MYBOOKS_HTTP_BACKEND=curl_cffi`: exe logs `HTTP backend: curl_cffi (Chrome TLS 指纹)` → curl_cffi + TLS impersonation active inside bundled app.
+- 117 unit tests still pass (`python -m unittest test_rule_engine.py`).

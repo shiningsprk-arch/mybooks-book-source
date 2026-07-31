@@ -85,6 +85,7 @@
   <div class="tabs">
     <div class="tab active" data-tab="sources">书源管理</div>
     <div class="tab" data-tab="search">搜索下载</div>
+    <div class="tab" data-tab="settings">设置</div>
   </div>
 </div>
 
@@ -139,6 +140,20 @@
     <div class="card" id="taskCard" style="display:none">
       <h2>任务进度</h2>
       <div class="tasks" id="taskList"></div>
+    </div>
+  </div>
+
+  <!-- ═══ 设置 ═══ -->
+  <div id="panel-settings" style="display:none">
+    <div class="card">
+      <h2>EPUB 输出目录</h2>
+      <div class="row">
+        <input type="text" id="epubDir" placeholder="例如 D:\电子书\EPUB…" style="max-width:480px">
+        <button id="btnSaveConfig" class="primary small">保存</button>
+        <button id="btnResetConfig" class="small">恢复默认</button>
+        <button id="btnOpenDir" class="small">打开目录</button>
+      </div>
+      <p class="hint" id="configHint" style="margin-top:8px"></p>
     </div>
   </div>
 
@@ -414,6 +429,36 @@ async function pollEpubTasks() {
 }
 setInterval(pollEpubTasks, 1000);
 
+/* ── 设置 ── */
+async function loadConfig() {
+  const r = await api("/api/config");
+  if (r.err !== "ok") return;
+  const d = r.data;
+  $("epubDir").value = d.epub_dir || "";
+  $("configHint").textContent = d.is_custom
+    ? `自定义输出目录：${d.epub_dir}（数据目录：${d.data_dir}）`
+    : `默认输出目录：${d.epub_dir}（数据目录：${d.data_dir}）。输入路径并保存即可自定义。`;
+}
+async function saveConfig() {
+  const epubDir = $("epubDir").value.trim();
+  const r = await post("/api/config", { epub_dir: epubDir });
+  if (r.err === "ok") {
+    toast(r.msg || "已保存");
+    loadConfig();
+  } else {
+    toast(r.msg || "保存失败");
+  }
+}
+async function resetConfig() {
+  const r = await post("/api/config", { epub_dir: "" });
+  if (r.err === "ok") { toast("已恢复默认"); loadConfig(); }
+  else { toast(r.msg || "操作失败"); }
+}
+async function openDir() {
+  const r = await post("/api/config/open", {});
+  if (r.err !== "ok") toast(r.msg || "打开失败");
+}
+
 /* ── 标签页 ── */
 document.querySelectorAll(".tab").forEach(tab => {
   tab.addEventListener("click", () => {
@@ -422,6 +467,7 @@ document.querySelectorAll(".tab").forEach(tab => {
     activeTab = tab.dataset.tab;
     $("panel-sources").style.display = activeTab === "sources" ? "" : "none";
     $("panel-search").style.display = activeTab === "search" ? "" : "none";
+    $("panel-settings").style.display = activeTab === "settings" ? "" : "none";
   });
 });
 
@@ -437,7 +483,11 @@ document.querySelectorAll(".tab").forEach(tab => {
     e.target.value = "";
   });
   $("filterSrc").addEventListener("input", renderSources);
+  $("btnSaveConfig").addEventListener("click", saveConfig);
+  $("btnResetConfig").addEventListener("click", resetConfig);
+  $("btnOpenDir").addEventListener("click", openDir);
   await loadSources();
+  await loadConfig();
   // 关闭弹窗：点遮罩
   $("srcModal").addEventListener("click", e => {
     if (e.target === $("srcModal")) closeSrcModal();

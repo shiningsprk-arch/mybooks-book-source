@@ -1021,6 +1021,25 @@ def apply_replace_rules(text: str, rules: list) -> str:
     return text
 
 
+# 零宽字符清理（借鉴 talebook cleaner.py：去除 U+200B/U+200C/U+200D/U+FEFF 等隐形字符）
+_ZERO_WIDTH_RE = re.compile("[\u200b\u200c\u200d\ufeff]")
+_MULTI_BLANK_LINES_RE = re.compile(r"\n{3,}")
+
+
+def normalize_content_text(text: str) -> str:
+    """规整正文文本：去零宽字符、统一换行、去行首尾空白、折叠多空行。
+
+    借鉴 talebook `webserver/services/booksource/cleaner.py` 的 cleaner 思路。
+    """
+    if not text:
+        return ""
+    text = _ZERO_WIDTH_RE.sub("", text)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = "\n".join(line.strip() for line in text.split("\n"))
+    text = _MULTI_BLANK_LINES_RE.sub("\n\n", text)
+    return text.strip()
+
+
 # =============================================================================
 # 辅助函数
 # =============================================================================
@@ -1074,24 +1093,87 @@ def make_doc(text, rule_hint=""):
 # 完整抓取流程（搜索→详情→目录→正文）
 # =============================================================================
 
+import random as _random
 import requests as req_lib
 
+try:
+    import chardet as _chardet
+    _HAS_CHARDET = True
+except ImportError:  # pragma: no cover - chardet 通常随 requests 安装
+    _chardet = None
+    _HAS_CHARDET = False
+
+# 浏览器 UA 池：会话级随机轮换，避免单一 UA 指纹被锁定
+_UA_POOL = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 Edg/122.0.0.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+]
+
+# 浏览器风格默认请求头（含 Sec-Fetch-* 等真实浏览器字段）
 _DEFAULT_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-    "Accept-Language": "zh-CN,zh;q=0.9",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "User-Agent": _UA_POOL[0],
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-User": "?1",
+    "Cache-Control": "max-age=0",
 }
 
 # 抓取节流与重试（可用环境变量覆盖）
 FETCH_DELAY_SECONDS = float(os.environ.get("MYBOOKS_FETCH_DELAY", "0.2"))
+FETCH_JITTER_SECONDS = float(os.environ.get("MYBOOKS_FETCH_JITTER", "0.15"))
 FETCH_RETRIES = int(os.environ.get("MYBOOKS_FETCH_RETRIES", "2"))
 FETCH_RETRY_BACKOFF = 1.0
+HTTP_TIMEOUT = float(os.environ.get("MYBOOKS_HTTP_TIMEOUT", "30"))
+
+
+def _pick_ua() -> str:
+    """从 UA 池随机取一个 UA。"""
+    try:
+        return _random.choice(_UA_POOL)
+    except Exception:  # pragma: no cover
+        return _UA_POOL[0]
+
+
+def _session_headers() -> dict:
+    """构造带随机 UA 的浏览器风格请求头。"""
+    headers = dict(_DEFAULT_HEADERS)
+    headers["User-Agent"] = _pick_ua()
+    return headers
+
+
+def _new_session():
+    """创建底层 HTTP 会话：优先 curl_cffi（Chrome TLS 指纹），否则 requests。
+
+    可用 MYBOOKS_HTTP_BACKEND=requests 强制退回纯 requests，
+    MYBOOKS_HTTP_BACKEND=curl_cffi 强制使用 curl_cffi。
+    """
+    backend = os.environ.get("MYBOOKS_HTTP_BACKEND", "auto").lower()
+    if backend in ("auto", "curl_cffi", "cffi", "curl"):
+        try:
+            from curl_cffi import requests as _cffi_requests
+            sess = _cffi_requests.Session(impersonate="chrome")
+            logger.info("HTTP backend: curl_cffi (Chrome TLS 指纹)")
+            return sess
+        except Exception as exc:
+            logger.warning("curl_cffi 不可用，退回 requests: %s", exc)
+    logger.info("HTTP backend: requests")
+    return req_lib.Session()
 
 
 def build_source_session(source=None):
-    """根据书源创建一个带默认头的 requests.Session。"""
-    session = req_lib.Session()
-    headers = dict(_DEFAULT_HEADERS)
+    """根据书源创建一个带默认头（随机 UA）的 HTTP 会话。"""
+    session = _new_session()
+    headers = _session_headers()
     if source is not None:
         hdr = parse_source_header(getattr(source, "header", None))
         headers.update(hdr)
@@ -1099,7 +1181,99 @@ def build_source_session(source=None):
         if source_url:
             headers.setdefault("Referer", source_url)
     session.headers.update(headers)
+    proxy = os.environ.get("MYBOOKS_PROXY", "").strip()
+    if proxy:
+        try:
+            session.proxies.update({"http": proxy, "https": proxy})
+        except Exception as exc:  # pragma: no cover
+            logger.warning("代理设置失败 %s: %s", proxy, exc)
     return session
+
+
+def _retry_after(resp) -> float:
+    """从响应头读取 Retry-After（秒），失败返回 0。"""
+    try:
+        headers = getattr(resp, "headers", None)
+        if not headers:
+            return 0.0
+        val = headers.get("Retry-After")
+        if val:
+            return float(val)
+    except Exception:
+        pass
+    return 0.0
+
+
+def _rotate_ua(session):
+    """换一个 UA 写入会话，用于 403/429 规避。"""
+    try:
+        session.headers["User-Agent"] = _pick_ua()
+    except Exception:
+        pass
+
+
+def _do_http(session, method: str, url: str, timeout: float = HTTP_TIMEOUT, **kwargs):
+    """带状态感知重试的请求执行器。
+
+    - 连接异常 / 5xx：指数退避重试
+    - 429：优先按 Retry-After 等待，其次退避
+    - 403：换 UA 后重试
+    """
+    fn = session.post if method.upper() == "POST" else session.get
+    last_exc = None
+    for attempt in range(FETCH_RETRIES + 1):
+        try:
+            resp = fn(url, timeout=timeout, **kwargs)
+        except Exception as exc:
+            last_exc = exc
+            logger.error("HTTP %s failed: %s — %s (attempt %d/%d)",
+                         method, url, exc, attempt + 1, FETCH_RETRIES + 1)
+            if attempt < FETCH_RETRIES:
+                _rotate_ua(session)
+                time.sleep(FETCH_RETRY_BACKOFF * (2 ** attempt))
+                continue
+            raise last_exc
+        code = int(getattr(resp, "status_code", 0) or 0)
+        if code == 429:
+            wait = _retry_after(resp) or (FETCH_RETRY_BACKOFF * (2 ** attempt))
+            logger.warning("HTTP 429 (%s): %s — 等待 %.1fs 重试", method, url, wait)
+            if attempt < FETCH_RETRIES:
+                time.sleep(wait)
+                continue
+        elif code in (403, 500, 502, 503, 504):
+            logger.warning("HTTP %d (%s): %s — 重试", code, method, url)
+            if attempt < FETCH_RETRIES:
+                _rotate_ua(session)
+                time.sleep(FETCH_RETRY_BACKOFF * (2 ** attempt))
+                continue
+        resp.raise_for_status()
+        return resp
+    raise last_exc or RuntimeError("HTTP request failed: %s" % url)
+
+
+def _response_text(resp, encoding: str = "") -> str:
+    """统一取响应文本：优先书源声明编码，其次 chardet 探测，再退回 utf-8。
+
+    兼容 requests（有 apparent_encoding）与 curl_cffi（无该属性）两类响应对象。
+    """
+    if encoding:
+        try:
+            resp.encoding = encoding
+        except Exception:
+            pass
+    elif not getattr(resp, "encoding", None) or str(resp.encoding).lower() in ("iso-8859-1", "iso8859-1"):
+        # 服务端未声明 charset 才探测，避免覆盖已声明编码
+        guessed = getattr(resp, "apparent_encoding", "") or ""
+        if not guessed and _HAS_CHARDET:
+            try:
+                guessed = _chardet.detect(resp.content).get("encoding") or "utf-8"
+            except Exception:
+                guessed = "utf-8"
+        try:
+            resp.encoding = guessed or "utf-8"
+        except Exception:
+            pass
+    return resp.text
 
 
 def fetch_url(url: str, session=None, source=None, encoding: str = "") -> str:
@@ -1120,30 +1294,12 @@ def fetch_url(url: str, session=None, source=None, encoding: str = "") -> str:
             parsed.params, safe_query, safe_fragment,
         ))
 
-    # 节流：避免对目标站连续轰炸（可用 MYBOOKS_FETCH_DELAY 覆盖，0 关闭）
+    # 节流：随机抖动，避免固定间隔指纹（可用 MYBOOKS_FETCH_DELAY/JITTER 覆盖）
     if FETCH_DELAY_SECONDS > 0:
-        time.sleep(FETCH_DELAY_SECONDS)
+        time.sleep(FETCH_DELAY_SECONDS + _random.uniform(0, FETCH_JITTER_SECONDS))
 
-    last_exc = None
-    for attempt in range(FETCH_RETRIES + 1):
-        try:
-            resp = session.get(url, headers=hdrs or None, timeout=30)
-            resp.raise_for_status()
-            break
-        except Exception as exc:
-            last_exc = exc
-            logger.error("HTTP request failed: %s — %s (attempt %d/%d)", url, exc, attempt + 1, FETCH_RETRIES + 1)
-            if attempt < FETCH_RETRIES:
-                time.sleep(FETCH_RETRY_BACKOFF * (2 ** attempt))
-    else:
-        raise last_exc
-
-    if encoding:
-        resp.encoding = encoding
-    elif not resp.encoding or resp.encoding.lower() in ("iso-8859-1", "iso8859-1"):
-        # 服务端未声明 charset 时才用 apparent_encoding 猜测，避免覆盖已声明编码
-        resp.encoding = resp.apparent_encoding
-    return resp.text
+    resp = _do_http(session, "GET", url, headers=hdrs or None)
+    return _response_text(resp, encoding)
 
 
 def _parse_search_url(search_url_str: str, base_url: str = ""):
@@ -1221,16 +1377,11 @@ def search_books(source, keyword: str, session=None, page: int = 1) -> list[dict
         body = render_url_template(str(options.get("body", "")), key=keyword, page=page)
         try:
             data = body.encode(charset) if charset else body.encode("utf-8")
-            resp = session.post(search_url, data=data, timeout=30)
-            resp.raise_for_status()
+            resp = _do_http(session, "POST", search_url, data=data)
         except Exception as exc:
             logger.error("HTTP POST failed: %s — %s", search_url, exc)
             raise
-        if charset:
-            resp.encoding = charset
-        elif not resp.encoding or resp.encoding.lower() in ("iso-8859-1", "iso8859-1"):
-            resp.encoding = resp.apparent_encoding
-        html = resp.text
+        html = _response_text(resp, charset)
     else:
         html = fetch_url(search_url, session=session, encoding=charset)
 
@@ -1488,6 +1639,7 @@ def fetch_content(source, chapter_url: str, session=None, max_pages: int = 20) -
 
     content = "\n".join(p for p in parts if p)
     content = apply_replace_rules(content, rule.replaceRegex)
+    content = normalize_content_text(content)
     return content
 
 

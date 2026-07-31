@@ -16,6 +16,14 @@ import requests
 from bs4 import BeautifulSoup
 
 try:
+    from .rule_engine import build_source_session
+except ImportError:  # standalone 运行（CLI / PyInstaller）
+    try:
+        from rule_engine import build_source_session
+    except ImportError:
+        build_source_session = None
+
+try:
     from ebooklib import epub
 except ImportError:
     epub = None
@@ -91,17 +99,40 @@ def _make_chapter_xhtml(title: str, content_html: str, index: int) -> epub.EpubH
     return chapter
 
 
+def _browser_headers(referer: str = "") -> dict:
+    """浏览器风格请求头（含 Referer）。"""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/125.0.0.0 Safari/537.36",
+        "Accept": "image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9",
+        "Referer": referer,
+    }
+    if not referer:
+        headers.pop("Referer", None)
+    return headers
+
+
+def _make_session(referer: str = ""):
+    """复用 rule_engine 的反爬会话（随机 UA + 浏览器头 + 可选 curl_cffi），失败退回 requests。"""
+    if build_source_session is not None:
+        try:
+            return build_source_session(None), True
+        except Exception:
+            pass
+    session = requests.Session()
+    session.headers.update(_browser_headers(referer))
+    return session, False
+
+
 def _download_cover(session: requests.Session, cover_url: str,
                     output_dir: str, referer: str = "") -> Optional[str]:
     """下载封面图片，返回本地路径。"""
     if not cover_url:
         return None
     try:
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                                 "AppleWebKit/537.36 (KHTML, like Gecko) "
-                                 "Chrome/120.0.0.0 Safari/537.36"}
-        if referer:
-            headers["Referer"] = referer
+        headers = _browser_headers(referer)
         resp = session.get(cover_url, headers=headers, timeout=15)
         resp.raise_for_status()
         content_type = resp.headers.get("content-type", "")
@@ -127,11 +158,7 @@ def _inline_images(soup, session: requests.Session, book, chapter_url: str = "",
     """下载正文中的 <img> 并内嵌为 EpubImage，重写 src 为本地路径。"""
     if soup is None:
         return
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                             "AppleWebKit/537.36 (KHTML, like Gecko) "
-                             "Chrome/120.0.0.0 Safari/537.36"}
-    if referer:
-        headers["Referer"] = referer
+    headers = _browser_headers(referer)
     for i, img in enumerate(soup.find_all("img")):
         src = (img.get("src") or "").strip()
         if not src or src.startswith("data:"):
@@ -215,12 +242,7 @@ def generate_epub(title: str, author: str,
     book.add_item(css)
 
     # 封面
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                      "AppleWebKit/537.36 (KHTML, like Gecko) "
-                      "Chrome/120.0.0.0 Safari/537.36",
-    })
+    session, _ = _make_session(referer)
 
     if cover_url:
         tmp_dir = os.path.dirname(output_path) or "."

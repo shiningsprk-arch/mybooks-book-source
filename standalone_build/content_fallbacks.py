@@ -14,6 +14,14 @@ import html as html_mod
 
 import requests
 
+try:
+    from .rule_engine import build_source_session
+except ImportError:  # standalone 运行（CLI / PyInstaller）
+    try:
+        from rule_engine import build_source_session
+    except ImportError:
+        build_source_session = None
+
 logger = logging.getLogger(__name__)
 
 # =============================================================================
@@ -184,13 +192,20 @@ def try_fetch_content(url: str, source=None) -> str | None:
 
     由 rule_engine.fetch_content 在 @js: 规则失败时调用。
     """
-    session = requests.Session()
+    session = None
+    if build_source_session is not None:
+        try:
+            session = build_source_session(source)
+        except Exception:
+            session = None
+    if session is None:
+        session = requests.Session()
     if source:
         headers = source.header if isinstance(source.header, dict) else {}
         session.headers.update({
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                           "AppleWebKit/537.36 (KHTML, like Gecko) "
-                          "Chrome/120.0.0.0 Safari/537.36",
+                          "Chrome/125.0.0.0 Safari/537.36",
             "Referer": source.bookSourceUrl,
         })
         if headers:

@@ -1,30 +1,58 @@
-# MyBooks Book Source Plugin
+# mybooks-book-source
 
-为 [MyBooks](https://github.com/talebook/talebook) 工具箱提供的书源管理插件，兼容 Legado 3.0 书源格式。
+基于 Legado 3.0 规则格式的 MyBooks 书源引擎与书源工具。
 
-## 功能
+- **规则引擎**：解析 Legado 兼容书源（CSS / JSONPath / XPath / 正则 / URL 模板 / Legado 选择器），提供搜索、书籍详情、目录、正文抓取、分类浏览能力。
+- **内容 fallback**：对 `@js:` 规则失败的站点（如得奇小说 deqixs）提供 Python 级模拟请求链。
+- **EPUB 生成**：抓取正文内嵌图片、封面，生成标准 EPUB。
+- **桌面版**：零依赖本地 Web UI（书源管理 / 多源搜索 / EPUB 生成），可打包为单文件 exe。
 
-- 书源 CRUD 管理（添加/编辑/删除/导入/导出）
-- Legado 3.0 规则引擎（CSS / JSONPath / XPath / Legado 简写选择器 / JS 运行时）
-- 多书源异步并发搜索（ThreadPoolExecutor，最长 300s 超时）
-- 书籍详情 / 目录 / 正文抓取（支持分页）
-- EPUB 生成 & Calibre 自动入库
-- 书源连通性校验 & 兼容性自动检测
-- 分类浏览（Explore）
-- Vue 管理页面
+## 快速开始（桌面版）
 
-## 用法
+```bash
+python desktop/run.py            # 开发模式，自动打开 http://127.0.0.1:8756/
+python -m PyInstaller mybooks-book-source-app.spec   # 打包 exe
+```
 
-作为 MyBooks 插件加载后，在工具箱中可见「书源管理」工具。支持：
+数据目录（书源与配置）：`~/.mybooks_book_source/`，可用环境变量 `MYBOOKS_BS_DATA` 覆盖。
+EPUB 输出目录可在页面「设置」标签中自定义。
 
-- 在 `/toolbox/book_source/` 管理书源
-- 在任意搜索框使用「全部书源」模式并发检索
-- 一键导入 Legado 3.0 JSON 格式书源
+## 反爬虫规避
 
-## 致谢
+抓取层内置多项反爬规避（参考 talebook 书源模块的请求头与正文清理思路，见下方版权声明）：
 
-书源规则引擎参考了 [talebook/talebook](https://github.com/talebook/talebook) 的书源实现。
+- **UA 轮换**：内置多个浏览器 UA 池，会话级随机轮换，规避单一 UA 指纹。
+- **浏览器风格请求头**：`Accept` / `Accept-Language` / `Accept-Encoding` / `Sec-Fetch-*` 等。
+- **随机节流抖动**：固定延时 + 随机抖动，避免固定间隔指纹。
+- **状态感知重试**：429 按 `Retry-After` 等待；403 / 5xx 换 UA 后指数退避重试。
+- **可选 TLS 指纹伪装**：若安装 `curl_cffi`，自动用 Chrome TLS 指纹请求；否则回退 `requests`。
+- **代理支持**：环境变量 `MYBOOKS_PROXY` 设置 http/https 代理。
+- **正文清理**：去除零宽字符（U+200B/U+200C/U+200D/U+FEFF）、统一换行、折叠多空行。
 
-## 许可证
+相关环境变量：
 
-MIT
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `MYBOOKS_HTTP_BACKEND` | `auto` | `requests` 强制退用 requests；`curl_cffi` 强制用 curl_cffi |
+| `MYBOOKS_FETCH_DELAY` | `0.2` | 请求间基础延时（秒），`0` 关闭 |
+| `MYBOOKS_FETCH_JITTER` | `0.15` | 额外随机抖动上限（秒） |
+| `MYBOOKS_FETCH_RETRIES` | `2` | 失败重试次数 |
+| `MYBOOKS_HTTP_TIMEOUT` | `30` | 请求超时（秒） |
+| `MYBOOKS_PROXY` | — | 代理地址，如 `http://127.0.0.1:7890` |
+| `MYBOOKS_BS_DATA` | `~/.mybooks_book_source` | 数据目录 |
+
+## 测试
+
+```bash
+python -X utf8 test_rule_engine.py
+```
+
+## 版权声明
+
+本项目书源模块的请求头规范、正文清理思路（零宽字符 / 换行规整）参考并部分借用了
+**[talebook](https://github.com/talebook/talebook)** 的
+[书源引擎](https://github.com/talebook/talebook/tree/master/webserver/services/booksource)
+实现（BSD-2-Clause 协议，见其 [LICENSE](https://github.com/talebook/talebook/blob/master/LICENSE)）。
+
+talebook 部分代码在 BSD-2-Clause 许可下使用，版权归其原作者所有。
+本项目其余代码遵循 MIT License。

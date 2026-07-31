@@ -18,6 +18,9 @@ API（全部 JSON）:
     POST /api/tasks/cancel    {task_id}       取消生成任务
     GET  /api/explore/categories?source=      分类列表
     GET  /api/explore?source=&url=            分类书籍列表
+    GET  /api/config                          读取配置（EPUB 输出目录）
+    POST /api/config         {epub_dir}       设置 EPUB 输出目录（空串恢复默认）
+    POST /api/config/open                     在文件管理器中打开 EPUB 输出目录
 """
 import json
 import logging
@@ -43,6 +46,7 @@ logger = logging.getLogger("desktop-server")
 
 DATA_DIR = Path(os.environ.get("MYBOOKS_BS_DATA", str(Path.home() / ".mybooks_book_source")))
 SOURCES_PATH = DATA_DIR / "sources.json"
+CONFIG_PATH = DATA_DIR / "config.json"
 BOOKS_DIR = DATA_DIR / "books"
 MAX_CHAPTERS = 9999
 
@@ -55,6 +59,45 @@ _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 def set_web_dir(path: str):
     global _WEB_DIR
     _WEB_DIR = path
+
+
+# ── 应用配置（EPUB 输出目录等） ──────────────────────────────────
+
+_config_lock = threading.RLock()
+
+
+def load_config() -> dict:
+    """读取 config.json，缺失或损坏时返回空 dict。"""
+    with _config_lock:
+        if not CONFIG_PATH.exists():
+            return {}
+        try:
+            return json.loads(CONFIG_PATH.read_text("utf-8"))
+        except Exception as exc:
+            logger.error("加载配置失败: %s", exc)
+            return {}
+
+
+def save_config(cfg: dict):
+    """原子写入 config.json。"""
+    with _config_lock:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = str(CONFIG_PATH) + ".tmp"
+        Path(tmp).write_text(json.dumps(cfg, ensure_ascii=False, indent=2), "utf-8")
+        os.replace(tmp, str(CONFIG_PATH))
+
+
+def get_books_dir() -> Path:
+    """EPUB 输出目录：优先用户配置，否则默认 DATA_DIR/books。"""
+    epub_dir = (load_config().get("epub_dir") or "").strip()
+    if epub_dir:
+        p = Path(epub_dir).expanduser()
+        try:
+            p = p.resolve()
+        except Exception:
+            pass
+        return p
+    return BOOKS_DIR
 
 
 # ── 书源持久化 ──────────────────────────────────────────────────
@@ -174,9 +217,10 @@ class EpubTaskManager:
 
             task.message = "生成 EPUB…"
             task.progress = 90
-            BOOKS_DIR.mkdir(parents=True, exist_ok=True)
+            books_dir = get_books_dir()
+            books_dir.mkdir(parents=True, exist_ok=True)
             safe_name = re.sub(r'[\\/:*?"<>|]', "_", title)
-            out_path = BOOKS_DIR / f"{safe_name}_{task.task_id}.epub"
+            out_path = books_dir / f"{safe_name}_{task.task_id}.epub"
             _generate_epub(
                 title=title, author=author, chapters=chapters,
                 cover_url=cover, output_path=str(out_path),
@@ -290,6 +334,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_index()
             if path == "/api/sources":
                 return self._ok([s.to_dict() for s in load_sources()])
+            if path == "/api/config":
+                return self._config_get()
             if path == "/api/sources/test":
                 return self._test_source()
             if path == "/api/search/status":
@@ -323,6 +369,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._import_url(data)
             if path == "/api/sources/import_zip":
                 return self._import_zip(data)
+            if path == "/api/config":
+                return self._config_set(data)
+            if path == "/api/config/open":
+                return self._config_open()
             if path == "/api/search":
                 return self._search(data)
             if path == "/api/epub/generate":
@@ -344,6 +394,43 @@ class Handler(BaseHTTPRequestHandler):
         return self._ok({"source": source.bookSourceName,
                          "count": len(results),
                          "samples": results[:3]})
+
+    def _config_get(self):
+        return self._ok({"data_dir": str(DATA_DIR),
+                         "epub_dir": str(get_books_dir()),
+                         "is_custom": bool(load_config().get("epub_dir"))})
+
+    def _config_set(self, data):
+        epub_dir = (data.get("epub_dir") or "").strip()
+        if not epub_dir:
+            save_config({})
+            return self._ok({"epub_dir": str(get_books_dir()),
+                             "is_custom": False}, "已恢复默认输出目录")
+        p = Path(epub_dir).expanduser()
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+            # 写测试验证可写
+            probe = p / ".write_test"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink()
+        except Exception as exc:
+            return self._err(f"目录不可用：{exc}")
+        save_config({"epub_dir": str(p)})
+        return self._ok({"epub_dir": str(get_books_dir()),
+                         "is_custom": True}, "已保存 EPUB 输出目录")
+
+    def _config_open(self):
+        books_dir = get_books_dir()
+        try:
+            books_dir.mkdir(parents=True, exist_ok=True)
+            if os.name == "nt":
+                os.startfile(str(books_dir))
+            else:  # pragma: no cover - 桌面版面向 Windows
+                import subprocess
+                subprocess.Popen(["xdg-open", str(books_dir)])
+            return self._ok({"epub_dir": str(books_dir)})
+        except Exception as exc:
+            return self._err(f"打开目录失败：{exc}")
 
     def _search_status(self):
         task_id = self._q1("task_id")

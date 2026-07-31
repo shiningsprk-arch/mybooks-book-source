@@ -444,6 +444,125 @@ class TestHeaderSearchUrl(unittest.TestCase):
 
 
 # ═════════════════════════════════════════════════════════════════
+# 反爬虫层测试（UA 轮换 / 状态感知重试 / 零宽清理）
+# ═════════════════════════════════════════════════════════════════
+
+class MockResp429:
+    """模拟 429 响应，带 Retry-After 头。"""
+    status_code = 429
+    encoding = "utf-8"
+    headers = {"Retry-After": "1", "content-type": "text/html; charset=utf-8"}
+
+    def raise_for_status(self):
+        from requests import HTTPError
+        raise HTTPError("429")
+
+    @property
+    def text(self):
+        return "429 Too Many Requests"
+
+
+class MockResp200:
+    status_code = 200
+    encoding = "utf-8"
+    headers = {"content-type": "text/html; charset=utf-8"}
+    text = "ok"
+    apparent_encoding = "utf-8"
+
+    def raise_for_status(self):
+        return None
+
+
+class MockRetrySession:
+    """前 n 次返回 429，之后返回 200；用于验证重试。"""
+    def __init__(self, fail_count=2):
+        self.calls = 0
+        self.fail_count = fail_count
+        self.headers = {}
+
+    def get(self, url, **kwargs):
+        self.calls += 1
+        if self.calls <= self.fail_count:
+            return MockResp429()
+        return MockResp200()
+
+
+class TestAntiScrape(unittest.TestCase):
+    def test_pick_ua_from_pool(self):
+        from rule_engine import _pick_ua, _UA_POOL
+        ua = _pick_ua()
+        self.assertIn(ua, _UA_POOL)
+        self.assertTrue(ua.startswith("Mozilla/5.0"))
+
+    def test_session_headers_have_browser_fields(self):
+        from rule_engine import build_source_session, _session_headers
+        headers = _session_headers()
+        for key in ("Accept", "Accept-Language", "Accept-Encoding",
+                    "Sec-Fetch-Dest", "Sec-Fetch-Mode", "Sec-Fetch-Site",
+                    "Upgrade-Insecure-Requests"):
+            self.assertIn(key, headers)
+        self.assertIn(headers["User-Agent"], __import__("rule_engine", fromlist=["_UA_POOL"])._UA_POOL)
+
+    def test_build_source_session_has_referer(self):
+        from rule_engine import build_source_session
+        src = BookSource(bookSourceName="s", bookSourceUrl="https://example.com")
+        session = build_source_session(src)
+        self.assertEqual(session.headers.get("Referer"), "https://example.com")
+        self.assertIn("User-Agent", session.headers)
+
+    def test_do_http_retries_on_429(self):
+        from rule_engine import _do_http
+        s = MockRetrySession(fail_count=2)
+        resp = _do_http(s, "GET", "https://example.com")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(s.calls, 3)
+
+    def test_do_http_no_retry_on_200(self):
+        from rule_engine import _do_http
+        s = MockRetrySession(fail_count=0)
+        resp = _do_http(s, "GET", "https://example.com")
+        self.assertEqual(s.calls, 1)
+        self.assertEqual(resp.status_code, 200)
+
+    def test_response_text_respects_declared_encoding(self):
+        from rule_engine import _response_text
+        class MockResp:
+            encoding = ""
+            text = "正文"
+            def __setattr__(self, k, v):
+                object.__setattr__(self, k, v)
+        resp = MockResp()
+        text = _response_text(resp, encoding="utf-8")
+        self.assertEqual(text, "正文")
+        self.assertEqual(resp.encoding, "utf-8")
+
+    def test_normalize_content_text_strips_zero_width(self):
+        from rule_engine import normalize_content_text
+        raw = "第一章\u200b内容\u200d\n\n\n  第二行  \n"
+        out = normalize_content_text(raw)
+        self.assertNotIn("\u200b", out)
+        self.assertNotIn("\u200d", out)
+        self.assertNotIn("\n\n\n", out)
+        self.assertIn("第一章", out)
+        self.assertIn("第二行", out)
+
+    def test_fetch_content_normalizes(self):
+        from rule_engine import fetch_content
+        html = '<div id="content"><p>第一段\u200b</p>\n\n\n<p>第二段</p></div>'
+        source = BookSource(
+            bookSourceName="s",
+            bookSourceUrl="https://example.com",
+            ruleContent=RuleContent(content="#content@text"),
+        )
+        with unittest.mock.patch("rule_engine.build_source_session",
+                                 return_value=MockSession(html)):
+            content = fetch_content(source, "/c/1")
+        self.assertNotIn("\u200b", content)
+        self.assertIn("第一段", content)
+        self.assertIn("第二段", content)
+
+
+# ═════════════════════════════════════════════════════════════════
 # URL 模板引擎测试
 # ═════════════════════════════════════════════════════════════════
 
@@ -973,7 +1092,7 @@ class TestEpubInlineImages(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             out = os.path.join(tmp, "test.epub")
-            with unittest.mock.patch("epub_helper.requests.Session", return_value=MockImgSession()):
+            with unittest.mock.patch("epub_helper._make_session", return_value=(MockImgSession(), False)):
                 generate_epub(
                     "测试书", "作者",
                     [{"title": "第1章", "content": '<p>正文<img src="http://example.com/i.jpg"/></p>',
