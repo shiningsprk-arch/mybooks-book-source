@@ -81,7 +81,7 @@ def cmd_toc(args):
             print("未获取到目录")
             return
         for i, ch in enumerate(toc, 1):
-            print(f"{i:4d}. {ch.get('title','?')}")
+            print(f"{i:4d}. {ch.get('chapterName','?')}")
 
 
 def cmd_epub(args):
@@ -111,10 +111,10 @@ def cmd_epub(args):
     to_download = toc[:args.max_chapters]
     chapters = []
     for i, entry in enumerate(to_download, 1):
-        title = entry.get("title", f"第{i}章")
-        url = entry.get("url", "")
+        title = entry.get("chapterName") or f"第{i}章"
+        url = entry.get("chapterUrl", "")
         logger.info("下载中 [%d/%d]: %s", i, len(to_download), title)
-        content = fetch_content(source, url, title)
+        content = fetch_content(source, url)
         if content:
             chapters.append({"title": title, "content": content, "url": url})
         else:

@@ -719,6 +719,32 @@ class TestEdgeCases(unittest.TestCase):
 # 完整流程测试（带 mock）
 # ═════════════════════════════════════════════════════════════════
 
+class MockResp:
+    """模拟 requests.Response。"""
+    status_code = 200
+    apparent_encoding = "utf-8"
+
+    def __init__(self, text):
+        self.text = text
+
+    def raise_for_status(self):
+        return None
+
+
+class MockSession:
+    """模拟 requests.Session，所有请求返回固定文本。"""
+    headers = {}
+
+    def __init__(self, text):
+        self._text = text
+
+    def get(self, url, **kwargs):
+        return MockResp(self._text)
+
+    def post(self, url, **kwargs):
+        return MockResp(self._text)
+
+
 class TestFullFlow(unittest.TestCase):
     def setUp(self):
         self.source = BookSource(
@@ -749,94 +775,42 @@ class TestFullFlow(unittest.TestCase):
             ),
         )
 
+    def _mock_session(self, text):
+        """构造返回固定 HTML 的 mock session，patch build_source_session。"""
+        from unittest.mock import patch
+        return patch("rule_engine.build_source_session", return_value=MockSession(text))
+
     def test_search_books_css(self):
         """测试基于 CSS 的搜索"""
-        from rule_engine import SESSION
-        original_get = SESSION.get
-        source = self.source
-
-        def mock_get(url, **kwargs):
-            class MockResp:
-                status_code = 200
-                text = HTML_BOOK_LIST
-                apparent_encoding = "utf-8"
-                raise_for_status = lambda self: None
-            return MockResp()
-
-        SESSION.get = mock_get
-        try:
-            results = search_books(source, "test")
+        with self._mock_session(HTML_BOOK_LIST):
+            results = search_books(self.source, "test")
             self.assertGreater(len(results), 0)
             if results:
                 self.assertIn("书名A", results[0].get("name", ""))
-        finally:
-            SESSION.get = original_get
 
     def test_fetch_book_info(self):
         """测试书籍详情抓取"""
-        from rule_engine import SESSION
-        original_get = SESSION.get
-
-        def mock_get(url, **kwargs):
-            class MockResp:
-                status_code = 200
-                text = HTML_DETAIL
-                apparent_encoding = "utf-8"
-                raise_for_status = lambda self: None
-            return MockResp()
-
-        SESSION.get = mock_get
-        try:
+        with self._mock_session(HTML_DETAIL):
             detail = fetch_book_info(self.source, "/book/1")
             self.assertEqual(detail.get("name"), "书名A")
             self.assertEqual(detail.get("author"), "作者A")
             self.assertIn("简介", detail.get("intro", ""))
-        finally:
-            SESSION.get = original_get
 
     def test_fetch_toc(self):
         """测试目录抓取"""
-        from rule_engine import SESSION
-        original_get = SESSION.get
-
-        def mock_get(url, **kwargs):
-            class MockResp:
-                status_code = 200
-                text = HTML_TOC
-                apparent_encoding = "utf-8"
-                raise_for_status = lambda self: None
-            return MockResp()
-
-        SESSION.get = mock_get
-        try:
+        with self._mock_session(HTML_TOC):
             toc = fetch_toc(self.source, "/book/1")
             self.assertEqual(len(toc), 3)
             if toc:
                 self.assertEqual(toc[0].get("chapterName"), "第一章 开始")
-        finally:
-            SESSION.get = original_get
 
     def test_fetch_content(self):
         """测试正文抓取"""
-        from rule_engine import SESSION
-        original_get = SESSION.get
-
-        def mock_get(url, **kwargs):
-            class MockResp:
-                status_code = 200
-                text = HTML_CONTENT
-                apparent_encoding = "utf-8"
-                raise_for_status = lambda self: None
-            return MockResp()
-
-        SESSION.get = mock_get
-        try:
+        with self._mock_session(HTML_CONTENT):
             content = fetch_content(self.source, "/c/1")
             self.assertIsNotNone(content)
             if content:
                 self.assertIn("正文第一段", content)
-        finally:
-            SESSION.get = original_get
 
 
 # ═════════════════════════════════════════════════════════════════

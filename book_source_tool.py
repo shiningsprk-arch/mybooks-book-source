@@ -29,6 +29,7 @@ from webserver.toolbox.book_source_engine import (
     fetch_toc,
     fetch_content,
     parse_explore_categories,
+    fetch_explore,
     SearchTaskService,
 )
 from webserver.toolbox.book_source_engine.epub_helper import generate_epub as _generate_epub
