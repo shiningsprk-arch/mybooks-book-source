@@ -295,3 +295,58 @@ ormalize_content_text\, adapted from talebook cleaner) |
 ### 验证
 - 真实弹窗实测：对话框出现（标题「选择 EPUB 输出目录」），取消 → `cancelled:true`；确认 → 返回默认输出目录 `C:\Users\plague doctor\.mybooks_book_source\books`；冻结 exe 同流程复测通过。
 - 119 单测全过；冻结 exe 重建（40.6MB）冒烟正常。
+
+---
+
+## Round 2026-08-01 (8) — MyBooks 插件化 + 真实接口集成验证（L3 + L2a）
+
+> **重要修正（推翻上方 File Map 的旧假设）**：目标 `mybooks-3.49.0` 源码核对证实——
+> ① `webserver/handlers/toolbox.py` 现存约 14 条路由，**没有任何 book_source 路由**，旧表假设「handler 已存在、无需改动」不成立；
+> ② 目标仓库（含用户 fork 各 v3.x 分支）从未部署过任何 book_source 文件；
+> ③ 引擎 4 个核心模块（rule_engine/epub_helper/content_fallbacks/search_task_service）本身已是「相对导入优先 + standalone 兜底」双模式，插件化无需改导入，只有测试与 CLI 需要转换。
+
+### 新增：`书源引擎插件/`（与桌面版共用引擎代码）
+
+| 文件 | 说明 |
+| --- | --- |
+| `webserver/handlers/book_source_api.py` | **新增 14 个 handler**（全部 `@js + @is_admin`），导出 `BOOK_SOURCE_ROUTES`：list/save/toggle/delete/search_async/search_status/test/download/generate_epub/cancel/progress/import_zip/import_url/download_epub |
+| `webserver/handlers/toolbox.py` | 目标文件修改版：+1 import（`BOOK_SOURCE_ROUTES`）+ `routes()` 末尾 `] + BOOK_SOURCE_ROUTES` |
+| `webserver/toolbox/toolset.py` | 目标文件修改版：`collect_tools()` 内 `from .book_source_tool import BookSourceTool` + `ToolSet.register(BookSourceTool.info())` |
+| `webserver/toolbox/book_source_engine/` | 引擎包 7 文件（与桌面版同源） |
+| `webserver/toolbox/book_source_tool.py` | 工具类：`service_item_name="书源管理"`，`TOOL_DATA_ROOT/<tool_id>/sources.json` 存储，`get_work_dir` 复用目标 BaseTool 基建 |
+| `app/pages/toolbox/book_source.vue` | 管理页（Nuxt 自动路由，无需改 router） |
+| `locales/{zh,en,zh-TW}.json` | `bookSource` 68 键片段 |
+| `tools/merge_locales.py` | 幂等合并片段进目标 `app/locales/*` |
+| `tools/integration_smoke.py` | 集成冒烟（18 用例，需目标源码树） |
+| `tests/test_book_source_engine.py` | 119 用例（包导入版） |
+
+### 修复（L2a 中发现）
+
+| 文件 | 修复 |
+| --- | --- |
+| `book_source_engine/js_runtime.py` | `import dukpy` 无条件顶层导入 → 无 dukpy 时整个引擎包无法导入。改为 try/except + `_HAS_DUKPY` 标志，`_get_interp` 缺失时抛 `JsRuleUnsupported`；**已同步桌面 `构建产物/standalone_build/js_runtime.py`** |
+| `tests/test_book_source_engine.py` | `TestJsRuntime`/`TestLegadoWithJs` 加 `@skipUnless(_HAS_DUKPY)`（与 README 声称一致） |
+| `handlers/book_source_api.py` | save 校验 `raw` 必须含非空 `bookSourceName`（`{}` 此前会静默建空源） |
+
+### L2a 真实接口集成验证（临时 venv，非 stub）
+
+环境：真实目标文件（models/i18n/loader/handlers/base/toolbox/toolset/base_tool/services/*）+ 插件文件 + 最小依赖（tornado/jinja2/sqlalchemy/pymupdf/pillow 等；`social_sqlalchemy` PyPI 无包 → 仅测试桩）。已核实：**所有 calibre 引用均为函数内懒加载**，本机无需 calibre 即可验证接口层。
+
+- 119 单元测试全过（含 dukpy JS 用例真跑）。
+- 18 项冒烟全过：真实 `BaseTool.create_task→update_task_progress→complete_task→get_last_task` 链路、任务失败/取消、书源 CRUD、`ToolSet` 注册（`/api/toolbox/list` 含 book_source）、27 条路由挂载（13+14）、14 条 book_source 端点响应契约（`err:"ok"` / `book_source.not_found` / `params.missing` / `import_failed` / `task.not_found` / epub 404）、真实 AsyncService 线程池任务执行。
+- 冒烟中踩过的坑（均属测试环境而非插件）：tornado `current_user` 缓存需重写 property、`BaseHandler.initialize` 需要 `ScopedSession/legacy/build_time/default_cover` settings、`AsyncService().setup(None, scoped)` 必须预置真实 scoped_session（否则服务线程 `.hash_key` 崩）。
+
+### 部署清单（PR）
+
+1. 引擎包 → `webserver/toolbox/book_source_engine/`（新增）
+2. `book_source_tool.py` → `webserver/toolbox/`（新增）
+3. `book_source_api.py` → `webserver/handlers/`（新增）
+4. `toolbox.py`：2 处（import + routes 尾部追加）
+5. `toolset.py`：2 处（collect_tools import + register）
+6. `book_source.vue` → `app/pages/toolbox/`（新增）
+7. locales：`python tools/merge_locales.py <mybooks-root>`
+8. `requirements.txt`：**追加 `dukpy>=0.4.0`（必须）**；其余依赖目标已具备
+
+### 验证
+- 119 单测 + 18 冒烟全过（见上）；`py_compile` 全过。
+- 真机端到端（docker + calibre 库）不在本机可测范围 → 以 L2a 接口验证 + 部署清单替代，部署后建议跑 `tests/integration_smoke.py`。
