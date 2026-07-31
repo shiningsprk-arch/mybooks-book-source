@@ -1,13 +1,9 @@
-"""
-js_runtime — 受限的书源 JS 运行时。
+﻿"""
+js_runtime 鈥?鍙楅檺鐨勪功婧?JS 杩愯鏃躲€?
+鍩轰簬 dukpy (Duktape) 寮曟搸锛屽彧鏀寔绠€鍗曞瓧娈靛悗澶勭悊锛?  - result.replace(...)
+  - 鐢ㄦ埛鑷畾涔夊嚱鏁帮紙閫氳繃 jsLib 瀛楁娉ㄥ唽锛?  - String 鎿嶄綔
 
-基于 dukpy (Duktape) 引擎，只支持简单字段后处理：
-  - result.replace(...)
-  - 用户自定义函数（通过 jsLib 字段注册）
-  - String 操作
-
-不支持 java.ajax / java.getString / <js> 块等外部副作用操作。
-"""
+涓嶆敮鎸?java.ajax / java.getString / <js> 鍧楃瓑澶栭儴鍓綔鐢ㄦ搷浣溿€?"""
 import base64 as _b64
 import hashlib as _hl
 import json
@@ -17,7 +13,11 @@ import threading
 from collections import OrderedDict
 from urllib.parse import urlparse
 
-import dukpy
+try:
+    import dukpy
+    _HAS_DUKPY = True
+except Exception:  # pragma: no cover - dukpy 鏃犲搴斿钩鍙?wheel 鏃堕檷绾?    dukpy = None
+    _HAS_DUKPY = False
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ _interp_cache_lock = threading.Lock()
 _INTERP_CACHE_MAX = 32
 _MAX_JS_LEN = 50000
 
-# 常见无界循环模式（无法被打断，直接拒绝执行）
+# 甯歌鏃犵晫寰幆妯″紡锛堟棤娉曡鎵撴柇锛岀洿鎺ユ嫆缁濇墽琛岋級
 _RE_UNBOUNDED_LOOP = re.compile(
     r"\bwhile\s*\(\s*(?:true|1|'1'|\"1\"|1\s*=\s*1)\s*\)"
     r"|\bfor\s*\(\s*;\s*;\s*\)"
@@ -36,7 +36,7 @@ _RE_UNBOUNDED_LOOP = re.compile(
 
 
 class JsRuleUnsupported(Exception):
-    """JS 规则不受支持（含 java.ajax 等外部副作用）。"""
+    """JS 瑙勫垯涓嶅彈鏀寔锛堝惈 java.ajax 绛夊閮ㄥ壇浣滅敤锛夈€?""
 
 
 def _build_globals_code(variables: dict, result: str = "", base_url: str = "") -> str:
@@ -94,7 +94,9 @@ def _dukpy_log(msg):
 
 
 def _get_interp(js_lib: str = "") -> dukpy.JSInterpreter:
-    """按 jsLib 内容缓存解释器，LRU 上限 _INTERP_CACHE_MAX。"""
+    """鎸?jsLib 鍐呭缂撳瓨瑙ｉ噴鍣紝LRU 涓婇檺 _INTERP_CACHE_MAX銆?""
+    if not _HAS_DUKPY:
+        raise JsRuleUnsupported("dukpy 鏈畨瑁咃紝鏃犳硶鎵ц JS 瑙勫垯")
     cache_key = js_lib or "__default__"
     with _interp_cache_lock:
         interp = _interp_cache.get(cache_key)
@@ -106,7 +108,7 @@ def _get_interp(js_lib: str = "") -> dukpy.JSInterpreter:
         try:
             interp.evaljs(js_lib)
         except Exception as exc:
-            logger.warning("jsLib 加载失败: %s", exc)
+            logger.warning("jsLib 鍔犺浇澶辫触: %s", exc)
     with _interp_cache_lock:
         _interp_cache[cache_key] = interp
         while len(_interp_cache) > _INTERP_CACHE_MAX:
@@ -129,7 +131,7 @@ def _detect_unsafe_js(code: str) -> bool:
 
 def run_js(code: str, result: str = "", variables: dict = None,
            base_url: str = "", js_lib: str = "") -> str:
-    """执行一条 @js: 规则代码。"""
+    """鎵ц涓€鏉?@js: 瑙勫垯浠ｇ爜銆?""
     code = (code or "").strip()
     if not code:
         return result
@@ -164,5 +166,6 @@ def run_js(code: str, result: str = "", variables: dict = None,
         err_msg = str(exc)
         if "java." in err_msg:
             raise JsRuleUnsupported(code) from exc
-        logger.warning("JS 执行失败: %s — %s", code[:60], err_msg)
+        logger.warning("JS 鎵ц澶辫触: %s 鈥?%s", code[:60], err_msg)
         raise JsRuleUnsupported(code) from exc
+
