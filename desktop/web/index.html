@@ -99,6 +99,8 @@
         <button id="btnAdd" class="primary small">＋ 新增书源</button>
         <input type="text" id="importUrl" placeholder="书源订阅 URL…" style="max-width:340px">
         <button id="btnImportUrl" class="small">URL 导入</button>
+        <button id="btnImportZip" class="small">ZIP 导入</button>
+        <input type="file" id="zipInput" accept=".zip" style="display:none">
       </div>
     </div>
     <div class="card">
@@ -286,6 +288,24 @@ async function importUrl() {
   toast(r.msg || (r.err === "ok" ? "导入完成" : "导入失败"));
   if (r.err === "ok") loadSources();
 }
+function importZipFile(file) {
+  if (!file) return;
+  if (!file.name.toLowerCase().endsWith(".zip")) { toast("请选择 .zip 文件"); return; }
+  toast(`正在解析 ${file.name}…`);
+  const reader = new FileReader();
+  reader.onload = async () => {
+    const b64 = String(reader.result).split(",")[1] || "";
+    try {
+      const r = await post("/api/sources/import_zip", { file_b64: b64, filename: file.name });
+      toast(r.msg || (r.err === "ok" ? "导入完成" : "导入失败"));
+      if (r.err === "ok") loadSources();
+    } catch (e) {
+      toast("导入失败：" + String(e));
+    }
+  };
+  reader.onerror = () => toast("读取文件失败");
+  reader.readAsDataURL(file);
+}
 
 /* ── 搜索 ── */
 async function doSearch() {
@@ -411,6 +431,11 @@ document.querySelectorAll(".tab").forEach(tab => {
   $("btnRefresh").addEventListener("click", loadSources);
   $("btnAdd").addEventListener("click", openAdd);
   $("btnImportUrl").addEventListener("click", importUrl);
+  $("btnImportZip").addEventListener("click", () => $("zipInput").click());
+  $("zipInput").addEventListener("change", e => {
+    importZipFile(e.target.files[0]);
+    e.target.value = "";
+  });
   $("filterSrc").addEventListener("input", renderSources);
   await loadSources();
   // 关闭弹窗：点遮罩

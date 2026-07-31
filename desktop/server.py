@@ -7,6 +7,7 @@ API（全部 JSON）:
     POST /api/sources/delete  {name}          删除书源
     POST /api/sources/toggle  {name,enabled}  启用/停用书源
     POST /api/sources/import_url {url}        从订阅 URL 批量导入
+    POST /api/sources/import_zip {file_b64,filename}  从 ZIP（Legado 导出格式）批量导入
     GET  /api/sources/test?source=           同步搜索 "测试" 验证连通
     POST /api/search          {keyword}       异步多源搜索 -> task_id
     GET  /api/search/status?task_id=          搜索任务进度
@@ -319,6 +320,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._toggle_source(data)
             if path == "/api/sources/import_url":
                 return self._import_url(data)
+            if path == "/api/sources/import_zip":
+                return self._import_zip(data)
             if path == "/api/search":
                 return self._search(data)
             if path == "/api/epub/generate":
@@ -430,19 +433,9 @@ class Handler(BaseHTTPRequestHandler):
                     return self._ok({"status": "toggled", "name": name, "enabled": s.enabled})
             return self._err("书源不存在")
 
-    def _import_url(self, data):
-        url = (data.get("url") or "").strip()
-        parsed = urllib.parse.urlparse(url)
-        if parsed.scheme not in ("http", "https") or not parsed.netloc:
-            return self._err("URL 必须是 http/https")
-        try:
-            resp = requests.get(url, timeout=30,
-                                headers={"User-Agent": _UA, "Accept": "application/json"})
-            resp.raise_for_status()
-            payload = resp.json()
-        except Exception as exc:
-            return self._err(f"拉取失败：{exc}")
-        items = payload if isinstance(payload, list) else [payload]
+    @staticmethod
+    def _merge_items(items) -> tuple:
+        """合并书源列表，返回 (added, updated, skipped)。"""
         added = updated = skipped = 0
         with _sources_lock:
             sources = load_sources()
@@ -460,6 +453,58 @@ class Handler(BaseHTTPRequestHandler):
                     sources.append(src)
                     added += 1
             save_sources(sources)
+        return added, updated, skipped
+
+    def _import_url(self, data):
+        url = (data.get("url") or "").strip()
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            return self._err("URL 必须是 http/https")
+        try:
+            resp = requests.get(url, timeout=30,
+                                headers={"User-Agent": _UA, "Accept": "application/json"})
+            resp.raise_for_status()
+            payload = resp.json()
+        except Exception as exc:
+            return self._err(f"拉取失败：{exc}")
+        items = payload if isinstance(payload, list) else [payload]
+        added, updated, skipped = self._merge_items(items)
+        return self._ok({"added": added, "updated": updated, "skipped": skipped},
+                        f"导入完成：新增 {added}，更新 {updated}，跳过 {skipped}")
+
+    def _import_zip(self, data):
+        """从 ZIP 压缩包导入书源（Legado 导出格式 importBookSource.json/txt）。"""
+        import base64 as _b64
+        import io as _io
+        import zipfile as _zf
+        b64 = (data.get("file_b64") or "").strip()
+        if not b64:
+            return self._err("缺少文件数据")
+        try:
+            raw = _b64.b64decode(b64)
+        except Exception as exc:
+            return self._err(f"文件解码失败：{exc}")
+        if len(raw) > 10 * 1024 * 1024:
+            return self._err("压缩包超过 10MB")
+        try:
+            with _zf.ZipFile(_io.BytesIO(raw)) as zf:
+                target = None
+                for name in zf.namelist():
+                    base = name.replace("\\", "/").rsplit("/", 1)[-1]
+                    if base in ("importBookSource.json", "importBookSource.txt"):
+                        target = name
+                        break
+                if target is None:
+                    return self._err("压缩包内未找到 importBookSource.json 或 importBookSource.txt")
+                text = zf.read(target).decode("utf-8", errors="replace")
+        except Exception as exc:
+            return self._err(f"压缩包解析失败：{exc}")
+        try:
+            payload = json.loads(text)
+        except Exception as exc:
+            return self._err(f"书源文件 JSON 解析失败：{exc}")
+        items = payload if isinstance(payload, list) else [payload]
+        added, updated, skipped = self._merge_items(items)
         return self._ok({"added": added, "updated": updated, "skipped": skipped},
                         f"导入完成：新增 {added}，更新 {updated}，跳过 {skipped}")
 
