@@ -408,6 +408,7 @@ class Handler(BaseHTTPRequestHandler):
                              "is_custom": False}, "已恢复默认输出目录")
         p = Path(epub_dir).expanduser()
         try:
+            p = p.resolve()
             p.mkdir(parents=True, exist_ok=True)
             # 写测试验证可写
             probe = p / ".write_test"
@@ -646,7 +647,11 @@ class Handler(BaseHTTPRequestHandler):
         book_url = (data.get("bookUrl") or "").strip()
         if not book_url:
             return self._err("缺少 bookUrl")
-        max_chapters = int(data.get("maxChapters", MAX_CHAPTERS))
+        try:
+            max_chapters = int(data.get("maxChapters", MAX_CHAPTERS))
+        except (TypeError, ValueError):
+            max_chapters = MAX_CHAPTERS
+        max_chapters = max(1, min(max_chapters, MAX_CHAPTERS))
         task_id = EPUB_TASKS.start(source, book_url,
                                    (data.get("bookTitle") or "").strip(), max_chapters)
         return self._ok({"task_id": task_id})

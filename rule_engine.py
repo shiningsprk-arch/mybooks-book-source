@@ -275,6 +275,8 @@ def _expand_indexes(items, length):
 def _apply_index_filter(found, mode, items):
     if not items or mode not in (".", "!"):
         return found
+    if not found:
+        return []
     idxs = _expand_indexes(items, len(found))
     if mode == "!":
         excluded = set(idxs)
@@ -1191,14 +1193,14 @@ def build_source_session(source=None):
 
 
 def _retry_after(resp) -> float:
-    """从响应头读取 Retry-After（秒），失败返回 0。"""
+    """从响应头读取 Retry-After（秒），失败返回 0。上限 60s，防异常站点无限等待。"""
     try:
         headers = getattr(resp, "headers", None)
         if not headers:
             return 0.0
         val = headers.get("Retry-After")
         if val:
-            return float(val)
+            return min(float(val), 60.0)
     except Exception:
         pass
     return 0.0

@@ -127,10 +127,10 @@ def _make_session(referer: str = ""):
 
 
 def _download_cover(session: requests.Session, cover_url: str,
-                    output_dir: str, referer: str = "") -> Optional[str]:
-    """下载封面图片，返回本地路径。"""
+                    referer: str = "") -> tuple[Optional[bytes], str]:
+    """下载封面图片，返回 (图片字节, 扩展名)。不落盘，避免在输出目录留垃圾文件。"""
     if not cover_url:
-        return None
+        return None, ".jpg"
     try:
         headers = _browser_headers(referer)
         resp = session.get(cover_url, headers=headers, timeout=15)
@@ -143,19 +143,20 @@ def _download_cover(session: requests.Session, cover_url: str,
             ext = ".webp"
         elif "gif" in content_type:
             ext = ".gif"
-        cover_path = os.path.join(output_dir, f"cover{ext}")
-        with open(cover_path, "wb") as f:
-            f.write(resp.content)
-        logger.debug("封面已下载: %s", cover_path)
-        return cover_path
+        logger.debug("封面已下载: %s (%d bytes)", cover_url, len(resp.content))
+        return resp.content, ext
     except Exception as exc:
         logger.warning("封面下载失败: %s — %s", cover_url, exc)
-        return None
+        return None, ".jpg"
 
 
 def _inline_images(soup, session: requests.Session, book, chapter_url: str = "",
-                   referer: str = "") -> None:
-    """下载正文中的 <img> 并内嵌为 EpubImage，重写 src 为本地路径。"""
+                   referer: str = "", chapter_index: int = 0) -> None:
+    """下载正文中的 <img> 并内嵌为 EpubImage，重写 src 为本地路径。
+
+    chapter_index 用于生成全局唯一的 uid/文件名 —— 否则多章节有图的书
+    会因每章都从 image_0000.jpg 开始而互相覆盖/uid 冲突。
+    """
     if soup is None:
         return
     headers = _browser_headers(referer)
@@ -186,10 +187,10 @@ def _inline_images(soup, session: requests.Session, book, chapter_url: str = "",
             ext = ".webp"
         elif "svg" in content_type:
             ext = ".svg"
-        fname = f"image_{i:04d}{ext}"
+        fname = f"ch{chapter_index:04d}_img{i:04d}{ext}"
         try:
             item = epub.EpubImage(
-                uid=f"img_{i}",
+                uid=f"ch{chapter_index:04d}_img_{i}",
                 file_name=f"images/{fname}",
                 media_type=content_type.split(";")[0].strip() or "image/jpeg",
                 content=resp.content,
@@ -245,12 +246,9 @@ def generate_epub(title: str, author: str,
     session, _ = _make_session(referer)
 
     if cover_url:
-        tmp_dir = os.path.dirname(output_path) or "."
-        cover_path = _download_cover(session, cover_url, tmp_dir, referer)
-        if cover_path and os.path.exists(cover_path):
-            with open(cover_path, "rb") as f:
-                cover_content = f.read()
-            book.set_cover(f"images/{os.path.basename(cover_path)}", cover_content)
+        cover_content, cover_ext = _download_cover(session, cover_url, referer)
+        if cover_content:
+            book.set_cover(f"images/cover{cover_ext}", cover_content)
 
     # 章节
     spine = ["nav"]
@@ -263,7 +261,8 @@ def generate_epub(title: str, author: str,
         ch_html = _clean_html_for_epub(ch_content)
         if ch_url:
             soup = BeautifulSoup(ch_html, "lxml")
-            _inline_images(soup, session, book, chapter_url=ch_url, referer=referer)
+            _inline_images(soup, session, book, chapter_url=ch_url, referer=referer,
+                           chapter_index=i)
             ch_html = str(soup)
         chapter_item = _make_chapter_xhtml(ch_title, ch_html, i)
         chapter_item.add_item(css)

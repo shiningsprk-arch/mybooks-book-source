@@ -232,3 +232,19 @@ ormalize_content_text\, adapted from talebook cleaner) |
 - `/api/sources` returns 3 sources.
 - Forced `MYBOOKS_HTTP_BACKEND=curl_cffi`: exe logs `HTTP backend: curl_cffi (Chrome TLS 指纹)` → curl_cffi + TLS impersonation active inside bundled app.
 - 117 unit tests still pass (`python -m unittest test_rule_engine.py`).
+
+---
+
+## Round 2026-07-31 (3) — Code review bugfixes
+
+| Area | Change |
+| --- | --- |
+| epub_helper.py | FIX: `_inline_images` uid/文件名按章节编号（ch0001_img0000.jpg…），多章节含图的书不再互相覆盖/uid 冲突；`_download_cover` 改为返回字节不落盘，EPUB 输出目录不再残留 cover.jpg 垃圾文件 |
+| desktop/web/index.html | FIX: 生成完成消息里的下载链接不再被 esc() 转义成纯文本（独立 `t.link` 渲染为可点按钮）；失败任务 chip 用红色 `.chip.bad` 区分 |
+| desktop/server.py | FIX: `maxChapters` 非法输入不再 500（默认/夹紧到 1..9999）；`_config_set` 保存前 resolve 路径，相对路径不再依赖运行时 CWD |
+| rule_engine.py | FIX: Legado 开区间索引规则（如 `class.list[0:]`）作用在缺失元素上返回 `[]` 而非抛 IndexError 中断整个搜索/目录；`Retry-After` 上限 60s 防异常站点无限等待 |
+| test_rule_engine.py | +2 tests：多章节图片无冲突（回归）、Legado 空元素开区间不崩溃 → 119 total |
+
+### 验证
+- 119 单测全过；dev 模式 API 冒烟（config 设置/恢复、maxChapters=abc → 200 且按默认值启任务、epub 输出目录 resolve 持久化）。
+- 冻结 exe 重建并实测：config / sources / sources/test / curl_cffi backend 全部正常。

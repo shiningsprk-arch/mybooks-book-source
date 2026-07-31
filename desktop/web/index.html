@@ -50,6 +50,7 @@
     background: #eef2ff; color: var(--primary); }
   .chip.ok { background: #dcfce7; color: var(--success); }
   .chip.off { background: #f3f4f6; color: var(--muted); }
+  .chip.bad { background: #fee2e2; color: var(--danger); }
   .cover { width: 30px; height: 40px; object-fit: cover; border-radius: 3px;
     background: #eef2f7; }
   .progress { height: 8px; background: #eef2f7; border-radius: 6px; overflow: hidden; }
@@ -74,6 +75,7 @@
     display: flex; justify-content: flex-end; gap: 8px; }
   .empty { color: var(--muted); text-align: center; padding: 26px 0; }
   .hint { color: var(--muted); font-size: 12px; }
+  .dl-link { color: var(--primary); font-weight: 600; }
   .err-text { color: var(--danger); font-size: 12px; margin-top: 6px; white-space: pre-wrap; }
 </style>
 </head>
@@ -396,9 +398,10 @@ function renderTasks() {
     <div class="task">
       <div class="t-head">
         <b>${esc(t.name)}</b>
-        <span class="chip ${t.status === "done" ? "ok" : t.status === "failed" ? "" : ""}">${t.statusText || t.status}</span>
+        <span class="chip ${t.status === "done" ? "ok" : t.status === "failed" ? "bad" : ""}">${t.statusText || t.status}</span>
       </div>
       <div class="t-msg">${esc(t.message)}</div>
+      ${t.link ? `<div class="t-msg"><a class="dl-link" href="${esc(t.link)}">点击下载 EPUB</a></div>` : ""}
       <div class="progress"><div style="width:${t.progress}%"></div></div>
     </div>`).join("");
 }
@@ -411,7 +414,8 @@ async function pollEpubTasks() {
     t.message = r.data.message;
     if (r.data.status === "done") {
       t.status = "done"; t.statusText = "完成";
-      t.message = `完成！<a href="/api/epub/download?task_id=${encodeURIComponent(t.taskId)}">点击下载 EPUB</a>`;
+      t.link = "/api/epub/download?task_id=" + encodeURIComponent(t.taskId);
+      t.message = "生成完成";
       toast(`「${t.name}」生成完成`);
     } else if (r.data.status === "failed") {
       t.status = "failed"; t.statusText = "失败";

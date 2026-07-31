@@ -561,6 +561,16 @@ class TestAntiScrape(unittest.TestCase):
         self.assertIn("第一段", content)
         self.assertIn("第二段", content)
 
+    def test_legado_range_on_missing_elements_no_crash(self):
+        """开区间索引 [0:] 作用在缺失元素上必须返回 []，不得抛 IndexError"""
+        from rule_engine import legado_select
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup('<div><p>hi</p></div>', "html.parser")
+        for rule in ("class.list[0:]", "class.list[1:]", "class.list.0:5", "class.list[0:5]"):
+            nodes, attr = legado_select(soup, rule)
+            self.assertEqual(nodes, [], rule)
+            self.assertEqual(attr, "", rule)
+
 
 # ═════════════════════════════════════════════════════════════════
 # URL 模板引擎测试
@@ -1102,8 +1112,46 @@ class TestEpubInlineImages(unittest.TestCase):
             with zipfile.ZipFile(out) as zf:
                 names = zf.namelist()
                 xhtml = zf.read("EPUB/chapter_0001.xhtml").decode("utf-8")
-                self.assertIn("images/image_0000.jpg", xhtml)
-                self.assertIn("EPUB/images/image_0000.jpg", names)
+                self.assertIn("images/ch0001_img0000.jpg", xhtml)
+                self.assertIn("EPUB/images/ch0001_img0000.jpg", names)
+
+    def test_multi_chapter_images_no_uid_collision(self):
+        """多章节各含图片：uid 与文件名必须全局唯一，不得互相覆盖"""
+        import zipfile
+        from epub_helper import generate_epub
+
+        class MockImgResp:
+            status_code = 200
+            headers = {"content-type": "image/jpeg"}
+            content = b"\xff\xd8\xff\xe0fakejpeg"
+
+            def raise_for_status(self):
+                return None
+
+        class MockImgSession:
+            headers = {}
+
+            def get(self, url, **kwargs):
+                return MockImgResp()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "test.epub")
+            chapters = [
+                {"title": "第1章", "content": '<p>a<img src="http://example.com/a.jpg"/></p>',
+                 "url": "http://example.com/ch1"},
+                {"title": "第2章", "content": '<p>b<img src="http://example.com/b.jpg"/></p>',
+                 "url": "http://example.com/ch2"},
+            ]
+            with unittest.mock.patch("epub_helper._make_session", return_value=(MockImgSession(), False)):
+                generate_epub("测试书", "作者", chapters, output_path=out)
+            with zipfile.ZipFile(out) as zf:
+                names = zf.namelist()
+                imgs = [n for n in names if n.startswith("EPUB/images/")]
+                self.assertEqual(len(imgs), 2)
+                self.assertIn("EPUB/images/ch0001_img0000.jpg", names)
+                self.assertIn("EPUB/images/ch0002_img0000.jpg", names)
+                xhtml2 = zf.read("EPUB/chapter_0002.xhtml").decode("utf-8")
+                self.assertIn("images/ch0002_img0000.jpg", xhtml2)
 
 
 # ═════════════════════════════════════════════════════════════════
