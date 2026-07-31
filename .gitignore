@@ -1,2 +1,9 @@
 __pycache__/
 *.pyc
+build/
+dist/
+talebook_build/
+*.exe
+*.zip
+fetched_source.json
+repo/

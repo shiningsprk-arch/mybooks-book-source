@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>书源工具 · 桌面版</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #ffffff; --line: #e2e5ea; --text: #24292f;
+    --muted: #6a737d; --primary: #2563eb; --primary-dark: #1d4ed8;
+    --danger: #dc2626; --success: #16a34a; --warning: #d97706;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.6 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; }
+  .topbar { background: var(--card); border-bottom: 1px solid var(--line);
+    padding: 10px 20px; display: flex; align-items: center; gap: 16px; }
+  .topbar h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  .topbar .port { color: var(--muted); font-size: 12px; }
+  .tabs { display: flex; gap: 4px; margin-left: auto; }
+  .tab { padding: 7px 16px; border-radius: 8px; cursor: pointer; color: var(--muted);
+    border: 1px solid transparent; user-select: none; }
+  .tab.active { background: var(--primary); color: #fff; }
+  .wrap { max-width: 1100px; margin: 16px auto; padding: 0 16px; }
+  .card { background: var(--card); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 14px; margin-bottom: 14px; }
+  .card h2 { font-size: 15px; margin: 0 0 10px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  input[type=text], textarea { border: 1px solid var(--line); border-radius: 8px;
+    padding: 8px 10px; font: inherit; background: #fff; width: 100%; }
+  input[type=text]:focus, textarea:focus { outline: 2px solid #bfdbfe;
+    border-color: var(--primary); }
+  textarea { font-family: Consolas, monospace; font-size: 12px; min-height: 200px; }
+  button { border: 1px solid var(--line); background: #fff; border-radius: 8px;
+    padding: 7px 14px; font: inherit; cursor: pointer; color: var(--text); }
+  button:hover { background: #f3f4f6; }
+  button.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+  button.primary:hover { background: var(--primary-dark); }
+  button.danger { color: var(--danger); border-color: #fecaca; }
+  button.danger:hover { background: #fef2f2; }
+  button.small { padding: 4px 10px; font-size: 12px; border-radius: 6px; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line);
+    vertical-align: middle; }
+  th { color: var(--muted); font-weight: 600; background: #fafbfc; }
+  tr:hover td { background: #fafbfc; }
+  .chip { display: inline-block; padding: 1px 8px; border-radius: 20px; font-size: 12px;
+    background: #eef2ff; color: var(--primary); }
+  .chip.ok { background: #dcfce7; color: var(--success); }
+  .chip.off { background: #f3f4f6; color: var(--muted); }
+  .cover { width: 30px; height: 40px; object-fit: cover; border-radius: 3px;
+    background: #eef2f7; }
+  .progress { height: 8px; background: #eef2f7; border-radius: 6px; overflow: hidden; }
+  .progress > div { height: 100%; background: var(--primary); transition: width .3s; }
+  .tasks { max-height: 320px; overflow-y: auto; }
+  .task { padding: 8px 2px; border-bottom: 1px dashed var(--line); }
+  .task .t-head { display: flex; justify-content: space-between; gap: 8px; }
+  .task .t-msg { color: var(--muted); font-size: 12px; margin: 3px 0; }
+  .toast { position: fixed; right: 20px; bottom: 20px; z-index: 99;
+    background: #111827; color: #fff; padding: 10px 16px; border-radius: 8px;
+    opacity: 0; transition: opacity .25s; max-width: 60vw; }
+  .toast.show { opacity: .95; }
+  .modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,.4);
+    display: none; align-items: center; justify-content: center; z-index: 50; }
+  .modal-mask.show { display: flex; }
+  .modal { background: #fff; border-radius: var(--radius); width: min(720px, 92vw);
+    max-height: 86vh; display: flex; flex-direction: column; }
+  .modal .m-head { padding: 12px 16px; border-bottom: 1px solid var(--line);
+    font-weight: 600; display: flex; justify-content: space-between; align-items: center; }
+  .modal .m-body { padding: 12px 16px; overflow-y: auto; }
+  .modal .m-foot { padding: 10px 16px; border-top: 1px solid var(--line);
+    display: flex; justify-content: flex-end; gap: 8px; }
+  .empty { color: var(--muted); text-align: center; padding: 26px 0; }
+  .hint { color: var(--muted); font-size: 12px; }
+  .err-text { color: var(--danger); font-size: 12px; margin-top: 6px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>📚 书源工具</h1>
+  <span class="port" id="portTag"></span>
+  <div class="tabs">
+    <div class="tab active" data-tab="sources">书源管理</div>
+    <div class="tab" data-tab="search">搜索下载</div>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <!-- ═══ 书源管理 ═══ -->
+  <div id="panel-sources">
+    <div class="card">
+      <div class="row">
+        <input type="text" id="filterSrc" placeholder="筛选书源…" style="max-width:260px">
+        <button id="btnRefresh" class="small">刷新</button>
+        <button id="btnAdd" class="primary small">＋ 新增书源</button>
+        <input type="text" id="importUrl" placeholder="书源订阅 URL…" style="max-width:340px">
+        <button id="btnImportUrl" class="small">URL 导入</button>
+      </div>
+    </div>
+    <div class="card">
+      <table>
+        <thead><tr>
+          <th style="width:36px">启用</th><th>名称</th><th>分组</th><th>网址</th>
+          <th style="width:190px">操作</th>
+        </tr></thead>
+        <tbody id="srcTable"><tr><td colspan="5" class="empty">加载中…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ═══ 搜索下载 ═══ -->
+  <div id="panel-search" style="display:none">
+    <div class="card">
+      <div class="row">
+        <input type="text" id="keyword" placeholder="输入书名 / 作者关键词…"
+               style="max-width:420px" onkeydown="if(event.key==='Enter')doSearch()">
+        <button id="btnSearch" class="primary" onclick="doSearch()">搜索</button>
+        <span class="hint" id="searchHint"></span>
+      </div>
+    </div>
+
+    <div class="card" id="resultCard" style="display:none">
+      <h2>搜索结果 <span class="hint" id="resultCount"></span></h2>
+      <table>
+        <thead><tr>
+          <th style="width:44px">封面</th><th>书名</th><th>作者</th><th>来源</th>
+          <th>最新章节</th><th style="width:120px">操作</th>
+        </tr></thead>
+        <tbody id="resultTable"></tbody>
+      </table>
+    </div>
+
+    <div class="card" id="taskCard" style="display:none">
+      <h2>任务进度</h2>
+      <div class="tasks" id="taskList"></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- 新增/编辑 书源 JSON 弹窗 -->
+<div class="modal-mask" id="srcModal">
+  <div class="modal">
+    <div class="m-head"><span id="srcModalTitle">新增书源</span>
+      <button class="small" onclick="closeSrcModal()">✕</button></div>
+    <div class="m-body">
+      <p class="hint">粘贴 Legado 3.0 格式的书源 JSON，或直接编辑已有书源。</p>
+      <textarea id="srcJson" placeholder='{"bookSourceName": "…", "bookSourceUrl": "…", "ruleSearch": {…}}'></textarea>
+      <div class="err-text" id="srcJsonErr"></div>
+    </div>
+    <div class="m-foot">
+      <button onclick="closeSrcModal()">取消</button>
+      <button class="primary" onclick="saveSource()">保存</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const api = async (path, opts) => {
+  const r = await fetch(path, opts);
+  const ct = r.headers.get("content-type") || "";
+  if (ct.includes("application/json")) return r.json();
+  return { err: "non-json", status: r.status };
+};
+const post = (path, body) => api(path, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(body),
+});
+
+let sources = [];
+let tasks = new Map();     // epub 任务
+let searchTask = null;
+let searchTimer = null;
+let activeTab = "sources";
+
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.classList.remove("show"), 3200);
+}
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g,
+    c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+/* ── 书源管理 ── */
+async function loadSources() {
+  const r = await api("/api/sources");
+  sources = (r.data || []);
+  renderSources();
+}
+function renderSources() {
+  const q = ($("filterSrc").value || "").toLowerCase();
+  const list = sources.filter(s =>
+    !q || s.bookSourceName.toLowerCase().includes(q)
+      || (s.bookSourceGroup || "").toLowerCase().includes(q)
+      || (s.bookSourceUrl || "").toLowerCase().includes(q));
+  const tb = $("srcTable");
+  if (!list.length) {
+    tb.innerHTML = '<tr><td colspan="5" class="empty">暂无书源，点「＋ 新增书源」或 URL 导入</td></tr>';
+    return;
+  }
+  tb.innerHTML = list.map(s => `
+    <tr>
+      <td><button class="small ${s.enabled ? "primary" : ""}"
+        onclick="toggleSource('${esc(s.bookSourceName)}')">${s.enabled ? "开" : "关"}</button></td>
+      <td><b>${esc(s.bookSourceName)}</b></td>
+      <td>${esc(s.bookSourceGroup || "—")}</td>
+      <td class="hint" style="word-break:break-all">${esc(s.bookSourceUrl)}</td>
+      <td>
+        <button class="small" onclick="testSource('${esc(s.bookSourceName)}')">测试</button>
+        <button class="small" onclick="openEdit('${esc(s.bookSourceName)}')">编辑</button>
+        <button class="small danger" onclick="delSource('${esc(s.bookSourceName)}')">删除</button>
+      </td>
+    </tr>`).join("");
+}
+async function toggleSource(name) {
+  const r = await post("/api/sources/toggle", { name });
+  if (r.err === "ok") { loadSources(); } else { toast(r.msg || "操作失败"); }
+}
+async function delSource(name) {
+  if (!confirm(`确定删除书源「${name}」？`)) return;
+  const r = await post("/api/sources/delete", { name });
+  if (r.err === "ok") { toast("已删除"); loadSources(); } else { toast(r.msg || "删除失败"); }
+}
+async function testSource(name) {
+  toast(`正在测试「${name}」…`);
+  const r = await api("/api/sources/test?source=" + encodeURIComponent(name));
+  if (r.err === "ok") {
+    toast(`「${name}」连通，搜索「测试」返回 ${r.data.count} 条` +
+      (r.data.samples.length ? `，例如：${r.data.samples.map(s => s.name).join(" / ")}` : ""));
+  } else {
+    toast(`「${name}」失败：${r.msg || "未知错误"}`);
+  }
+}
+function openAdd() {
+  $("srcModalTitle").textContent = "新增书源";
+  $("srcJson").value = "";
+  $("srcJsonErr").textContent = "";
+  $("srcModal").classList.add("show");
+}
+function openEdit(name) {
+  const s = sources.find(x => x.bookSourceName === name);
+  if (!s) return;
+  $("srcModalTitle").textContent = "编辑书源：" + name;
+  $("srcJson").value = JSON.stringify(s, null, 2);
+  $("srcJsonErr").textContent = "";
+  $("srcModal").classList.add("show");
+}
+function closeSrcModal() { $("srcModal").classList.remove("show"); }
+async function saveSource() {
+  let raw;
+  try { raw = JSON.parse($("srcJson").value); }
+  catch (e) { $("srcJsonErr").textContent = "JSON 格式错误：" + e.message; return; }
+  if (!raw.bookSourceName || !raw.bookSourceUrl) {
+    $("srcJsonErr").textContent = "缺少 bookSourceName 或 bookSourceUrl";
+    return;
+  }
+  if (typeof raw.header === "string" && raw.header.trim().startsWith("{")) {
+    try { raw.header = JSON.parse(raw.header); } catch (e) { /* 保留原样 */ }
+  }
+  const r = await post("/api/sources/save", { raw });
+  if (r.err === "ok") {
+    toast("保存成功");
+    closeSrcModal();
+    loadSources();
+  } else {
+    $("srcJsonErr").textContent = r.msg || "保存失败";
+  }
+}
+async function importUrl() {
+  const url = $("importUrl").value.trim();
+  if (!url) { toast("请输入订阅 URL"); return; }
+  const r = await post("/api/sources/import_url", { url });
+  toast(r.msg || (r.err === "ok" ? "导入完成" : "导入失败"));
+  if (r.err === "ok") loadSources();
+}
+
+/* ── 搜索 ── */
+async function doSearch() {
+  const kw = $("keyword").value.trim();
+  if (!kw) { toast("请输入关键词"); return; }
+  stopSearchPoll();
+  searchTask = null;
+  $("resultTable").innerHTML = "";
+  $("resultCard").style.display = "none";
+  const r = await post("/api/search", { keyword: kw });
+  if (r.err !== "ok") { toast(r.msg || "搜索失败"); return; }
+  searchTask = r.data.task_id;
+  const total = r.data.total;
+  $("searchHint").textContent = `共 ${total} 个书源并发搜索中…`;
+  $("resultCard").style.display = "";
+  searchTimer = setInterval(pollSearch, 1200);
+}
+async function pollSearch() {
+  if (!searchTask) return;
+  const r = await api("/api/search/status?task_id=" + encodeURIComponent(searchTask));
+  if (r.err !== "ok" || !r.data) { stopSearchPoll(); return; }
+  const d = r.data;
+  const seen = new Set();
+  $("resultTable").querySelectorAll("tr").forEach(tr => seen.add(tr.dataset.key));
+  (d.results || []).forEach(res => {
+    (res.books || []).forEach(b => {
+      const key = b.bookUrl + "|" + res.source_name;
+      if (seen.has(key)) return;
+      seen.add(key);
+      const tr = document.createElement("tr");
+      tr.dataset.key = key;
+      tr.innerHTML = `
+        <td>${b.coverUrl ? `<img class="cover" src="${esc(b.coverUrl)}" onerror="this.style.visibility='hidden'">` : ""}</td>
+        <td><b>${esc(b.name)}</b></td>
+        <td>${esc(b.author)}</td>
+        <td><span class="chip">${esc(res.source_name)}</span></td>
+        <td class="hint" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(b.lastChapter)}</td>
+        <td><button class="small primary" onclick="genEpub('${esc(res.source_name)}','${esc(b.bookUrl)}','${esc(b.name)}')">生成 EPUB</button></td>`;
+      $("resultTable").appendChild(tr);
+    });
+  });
+  $("resultCount").textContent = `(${seen.size} 条 · ${d.done}/${d.total} 源完成)`;
+  if (d.finished) {
+    stopSearchPoll();
+    $("searchHint").textContent = `搜索完成，共 ${seen.size} 条结果（${d.done}/${d.total} 源完成）`;
+  }
+}
+function stopSearchPoll() {
+  if (searchTimer) { clearInterval(searchTimer); searchTimer = null; }
+}
+
+/* ── EPUB 生成任务 ── */
+async function genEpub(source, bookUrl, name) {
+  const key = bookUrl + "|" + source;
+  if (tasks.has(key) && ["running"].includes(tasks.get(key).status)) {
+    toast("该书籍已在生成中"); return;
+  }
+  const r = await post("/api/epub/generate", {
+    source, bookUrl, bookTitle: name, maxChapters: 9999,
+  });
+  if (r.err !== "ok") { toast(r.msg || "启动失败"); return; }
+  const task = { key, source, name, taskId: r.data.task_id, status: "running",
+    progress: 0, message: "初始化" };
+  tasks.set(key, task);
+  $("taskCard").style.display = "";
+  renderTasks();
+}
+function renderTasks() {
+  const box = $("taskList");
+  const arr = Array.from(tasks.values());
+  if (!arr.length) { $("taskCard").style.display = "none"; return; }
+  box.innerHTML = arr.map(t => `
+    <div class="task">
+      <div class="t-head">
+        <b>${esc(t.name)}</b>
+        <span class="chip ${t.status === "done" ? "ok" : t.status === "failed" ? "" : ""}">${t.statusText || t.status}</span>
+      </div>
+      <div class="t-msg">${esc(t.message)}</div>
+      <div class="progress"><div style="width:${t.progress}%"></div></div>
+    </div>`).join("");
+}
+async function pollEpubTasks() {
+  const running = Array.from(tasks.values()).filter(t => t.status === "running");
+  for (const t of running) {
+    const r = await api("/api/epub/status?task_id=" + encodeURIComponent(t.taskId));
+    if (r.err !== "ok" || !r.data) continue;
+    t.progress = r.data.progress;
+    t.message = r.data.message;
+    if (r.data.status === "done") {
+      t.status = "done"; t.statusText = "完成";
+      t.message = `完成！<a href="/api/epub/download?task_id=${encodeURIComponent(t.taskId)}">点击下载 EPUB</a>`;
+      toast(`「${t.name}」生成完成`);
+    } else if (r.data.status === "failed") {
+      t.status = "failed"; t.statusText = "失败";
+      t.message = r.data.error || r.data.message;
+      toast(`「${t.name}」生成失败：${(r.data.error || "").slice(0, 120)}`);
+    } else if (r.data.status === "cancelled") {
+      t.status = "cancelled"; t.statusText = "已取消";
+    }
+  }
+  if (!Array.from(tasks.values()).some(t => t.status === "running")) {
+    renderTasks();
+    return;
+  }
+  renderTasks();
+}
+setInterval(pollEpubTasks, 1000);
+
+/* ── 标签页 ── */
+document.querySelectorAll(".tab").forEach(tab => {
+  tab.addEventListener("click", () => {
+    document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+    tab.classList.add("active");
+    activeTab = tab.dataset.tab;
+    $("panel-sources").style.display = activeTab === "sources" ? "" : "none";
+    $("panel-search").style.display = activeTab === "search" ? "" : "none";
+  });
+});
+
+/* ── 初始化 ── */
+(async function init() {
+  $("portTag").textContent = "localhost:" + location.port;
+  $("btnRefresh").addEventListener("click", loadSources);
+  $("btnAdd").addEventListener("click", openAdd);
+  $("btnImportUrl").addEventListener("click", importUrl);
+  $("filterSrc").addEventListener("input", renderSources);
+  await loadSources();
+  // 关闭弹窗：点遮罩
+  $("srcModal").addEventListener("click", e => {
+    if (e.target === $("srcModal")) closeSrcModal();
+  });
+  window.closeSrcModal = closeSrcModal;
+  window.saveSource = saveSource;
+  window.openEdit = openEdit;
+  window.toggleSource = toggleSource;
+  window.delSource = delSource;
+  window.testSource = testSource;
+  window.doSearch = doSearch;
+  window.genEpub = genEpub;
+  window.openAdd = openAdd;
+  window.importUrl = importUrl;
+})();
+</script>
+</body>
+</html>
