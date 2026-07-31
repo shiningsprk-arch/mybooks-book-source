@@ -21,6 +21,7 @@ API（全部 JSON）:
     GET  /api/config                          读取配置（EPUB 输出目录）
     POST /api/config         {epub_dir}       设置 EPUB 输出目录（空串恢复默认）
     POST /api/config/open                     在文件管理器中打开 EPUB 输出目录
+    POST /api/config/pick                     弹出系统文件夹选择对话框，返回选中路径
 """
 import json
 import logging
@@ -377,6 +378,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._config_set(data)
             if path == "/api/config/open":
                 return self._config_open()
+            if path == "/api/config/pick":
+                return self._config_pick()
             if path == "/api/search":
                 return self._search(data)
             if path == "/api/epub/generate":
@@ -436,6 +439,31 @@ class Handler(BaseHTTPRequestHandler):
             return self._ok({"epub_dir": str(books_dir)})
         except Exception as exc:
             return self._err(f"打开目录失败：{exc}")
+
+    def _config_pick(self):
+        """弹原生文件夹选择对话框，返回选中路径（取消返回 cancelled）。"""
+        import subprocess
+        script = (
+            "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;"
+            "Add-Type -AssemblyName System.Windows.Forms;"
+            "$d = New-Object System.Windows.Forms.FolderBrowserDialog;"
+            "$d.Description = '\u9009\u62e9 EPUB \u8f93\u51fa\u76ee\u5f55';"
+            "$d.ShowNewFolderButton = $true;"
+            "if ($args[0]) { $d.SelectedPath = $args[0] };"
+            "if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK)"
+            " { Write-Output $d.SelectedPath }"
+        )
+        try:
+            proc = subprocess.run(
+                ["powershell", "-NoProfile", "-STA", "-Command", script,
+                 str(get_books_dir())],
+                capture_output=True, timeout=180)
+        except Exception as exc:
+            return self._err(f"选择目录失败：{exc}")
+        path = proc.stdout.decode("utf-8", "replace").strip()
+        if not path:
+            return self._ok({"path": None, "cancelled": True}, "已取消选择")
+        return self._ok({"path": path, "cancelled": False})
 
     def _search_status(self):
         task_id = self._q1("task_id")

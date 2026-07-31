@@ -271,3 +271,16 @@ ormalize_content_text\, adapted from talebook cleaner) |
 ### 验证
 - 单测直连 `_send_file`（中文文件名 epub）：响应头全部 ASCII 可解码，`Content-Disposition: attachment; filename="__abcd1234.epub"; filename*=UTF-8''%E6%96%97%E7%A0%B4…`，正文完整，latin-1 不再炸。
 - 119 单测全过；冻结 exe 重建（40.6MB）页面/配置正常；v0.1.0 Release 资产已替换为修复版。
+
+## Round 2026-07-31 (6) — 系统要求入 README + EPUB 输出目录文件夹选择
+
+| Area | Change |
+| --- | --- |
+| README.md | 新增「系统要求（Windows 桌面版 exe）」：64 位 Win10/11、免装 Python/VC++ 运行库（已内置）、需联网、免管理员、SmartScreen 首次拦截提示、控制台窗口勿关；修正 EPUB 目录设置位置描述（左栏侧边栏） |
+| desktop/server.py | NEW `POST /api/config/pick`：调 PowerShell `FolderBrowserDialog`（STA）弹原生文件夹选择框，初始目录为当前输出目录，UTF-8 输出选中路径（取消返回 `cancelled`），180s 超时兜底 |
+| desktop/web/index.html | 侧边栏 EPUB 输出目录新增「选择文件夹…」按钮：点击弹系统对话框，选中后填入输入框，点「保存」生效 |
+
+### 验证
+- PowerShell 对话框脚本构造/初始路径传递正常；真实弹窗可打开（实测进程存活）。
+- monkeypatch `subprocess.run` 直测 `_config_pick`：选中路径/取消两种分支 JSON 均正确（UTF-8 中文路径往返无损）。
+- node 语法检查 + 119 单测全过；冻结 exe 重建（40.6MB）页面含新按钮，config 正常。

@@ -15,7 +15,15 @@ python -m PyInstaller mybooks-book-source-app.spec   # 打包 exe
 ```
 
 数据目录（书源与配置）：`~/.mybooks_book_source/`，可用环境变量 `MYBOOKS_BS_DATA` 覆盖。
-EPUB 输出目录可在页面「设置」标签中自定义。
+EPUB 输出目录可在页面左侧边栏设置（输入路径，或点「选择文件夹…」弹出系统文件夹对话框）。
+
+## 系统要求（Windows 桌面版 exe）
+
+- **系统**：64 位 Windows 10 / 11。无需安装 Python，无需安装 VC++ 运行库（均已内置）。
+- **网络**：搜索与抓取书源内容需要联网。
+- **权限**：无需管理员权限；数据只写入 `%USERPROFILE%\.mybooks_book_source\`，仅监听本机 `127.0.0.1`。
+- 首次运行可能被 Windows SmartScreen 拦截（exe 未签名）：点「更多信息」→「仍要运行」即可。
+- 启动后请保持黑色控制台窗口开启（关闭它服务即退出）。
 
 ## 反爬虫规避
 

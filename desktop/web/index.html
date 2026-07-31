@@ -115,7 +115,8 @@
       <h3>EPUB 输出目录</h3>
       <input type="text" id="epubDir" placeholder="例如 D:\电子书\EPUB…">
       <div class="row" style="margin-top:8px">
-        <button id="btnSaveConfig" class="primary small">保存</button>
+        <button id="btnPickDir" class="primary small">选择文件夹…</button>
+        <button id="btnSaveConfig" class="small">保存</button>
         <button id="btnResetConfig" class="small">恢复默认</button>
         <button id="btnOpenDir" class="small">打开目录</button>
       </div>
@@ -508,6 +509,15 @@ async function openDir() {
   const r = await post("/api/config/open", {});
   if (r.err !== "ok") toast(r.msg || "打开失败");
 }
+async function pickDir() {
+  toast("请在弹出的窗口中选择文件夹…");
+  const r = await post("/api/config/pick", {});
+  if (r.err !== "ok") { toast(r.msg || "选择失败"); return; }
+  if (r.data && r.data.path) {
+    $("epubDir").value = r.data.path;
+    toast("已选择目录，点「保存」生效");
+  }
+}
 
 /* ── 标签页 ── */
 document.querySelectorAll(".tab").forEach(tab => {
@@ -535,6 +545,7 @@ document.querySelectorAll(".tab").forEach(tab => {
   $("btnSaveConfig").addEventListener("click", saveConfig);
   $("btnResetConfig").addEventListener("click", resetConfig);
   $("btnOpenDir").addEventListener("click", openDir);
+  $("btnPickDir").addEventListener("click", pickDir);
   await loadSources();
   await loadConfig();
   renderTasks();
