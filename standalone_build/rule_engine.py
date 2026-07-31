@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import time
 from collections import deque
 from itertools import zip_longest
 from typing import Any, Optional
@@ -379,7 +381,7 @@ def _apply_tail_regex(value: str, rule: str) -> str:
         if replace_first:
             m = re.search(pattern, value)
             if not m:
-                return ""
+                return value
             return re.sub(pattern, replacement, m.group(0), count=1)
         return re.sub(pattern, replacement, value)
     except re.error:
@@ -393,7 +395,8 @@ def legado_extract_one(rule: str, html: str, base_url: str = "",
         try:
             return run_js(js_code, result="", variables=variables or {},
                           base_url=base_url, js_lib=js_lib)
-        except _JsRuleUnsupported:
+        except _JsRuleUnsupported as exc:
+            logger.debug("JS rule unsupported: %s — %s", rule[:60], exc)
             return None
     js_code = ""
     if "@js:" in rule:
@@ -417,8 +420,8 @@ def legado_extract_one(rule: str, html: str, base_url: str = "",
             result_val = run_js(js_code, result=value, variables=variables or {},
                                 base_url=base_url, js_lib=js_lib)
             value = result_val
-        except _JsRuleUnsupported:
-            pass
+        except _JsRuleUnsupported as exc:
+            logger.debug("JS rule unsupported (kept raw value): %s — %s", js_code[:60], exc)
     if tail_regex:
         value = _apply_tail_regex(value, tail_regex)
     return value.strip() if value else ""
@@ -448,8 +451,8 @@ def legado_extract_from_element(element: Tag, rule: str, base_url: str = "",
             result_val = run_js(js_code, result=value, variables=variables or {},
                                 base_url=base_url, js_lib=js_lib)
             value = result_val
-        except _JsRuleUnsupported:
-            pass
+        except _JsRuleUnsupported as exc:
+            logger.debug("JS rule unsupported (kept raw value): %s — %s", js_code[:60], exc)
     if tail_regex:
         value = _apply_tail_regex(value, tail_regex)
     return value.strip() if value else ""
@@ -476,7 +479,9 @@ def legado_extract_list(list_rule: str, item_rules: dict[str, str], html: str,
 # =============================================================================
 
 class JsonPathEngine:
-    """轻量 JSONPath 实现。"""
+    """轻量 JSONPath 实现，支持过滤器 [?(@.field == value)] 子集。"""
+
+    _OP_RE = re.compile(r"\s*(==|!=|>=|<=|>|<)\s*")
 
     @staticmethod
     def parse(path: str) -> list:
@@ -507,7 +512,9 @@ class JsonPathEngine:
                     if end == -1:
                         raise ValueError(f"Unclosed bracket in JSONPath: {path}")
                     content = rest[pos + 1:end]
-                    if ":" in content:
+                    if content.startswith("?") or content.startswith("? "):
+                        tokens.append(("filter", content[1:].strip()))
+                    elif ":" in content:
                         tokens.append(("slice", content))
                     elif content == "*":
                         tokens.append(("wildcard",))
@@ -532,6 +539,120 @@ class JsonPathEngine:
                 tokens.append(("key", m.group("num")))
             pos = m.end()
         return tokens
+
+    @staticmethod
+    def _lookup(item, expr: str):
+        """按 @.a.b / @['a'] / @ 语法从 item 取值。"""
+        expr = expr.strip()
+        if not expr or expr == "@":
+            return item
+        rest = expr
+        if rest.startswith("@"):
+            rest = rest[1:]
+        cur = item
+        while rest:
+            rest = rest.strip()
+            if rest.startswith("."):
+                m = re.match(r"\.([A-Za-z_][\w]*)", rest)
+                if not m:
+                    return None
+                key = m.group(1)
+                rest = rest[m.end():]
+            elif rest.startswith("['") or rest.startswith('["'):
+                quote = rest[1]
+                end = rest.find(quote, 2)
+                if end == -1:
+                    return None
+                key = rest[2:end]
+                rest = rest[end + 2:]
+            else:
+                return None
+            if isinstance(cur, dict):
+                cur = cur.get(key)
+            else:
+                return None
+        return cur
+
+    @staticmethod
+    def _eval_filter(item, expr: str) -> bool:
+        """求值过滤器表达式：支持 == != >= <= > <、&& ||、字符串/数字/布尔/null 字面量。"""
+        expr = expr.strip()
+        if not expr:
+            return False
+        # 剥掉 [?()] 语法带来的外层括号
+        while expr.startswith("(") and expr.endswith(")"):
+            expr = expr[1:-1].strip()
+
+        # 先按 || 拆（取任一为真）
+        for or_part in expr.split("||"):
+            or_part = or_part.strip()
+            if not or_part:
+                continue
+            # 再按 && 拆（全部为真）
+            and_parts = or_part.split("&&")
+            ok = True
+            for part in and_parts:
+                part = part.strip()
+                if not part:
+                    ok = False
+                    break
+                m = JsonPathEngine._OP_RE.search(part)
+                if not m:
+                    ok = False
+                    break
+                op = m.group(1)
+                left = part[:m.start()].strip()
+                right = part[m.end():].strip()
+                lv = JsonPathEngine._lookup(item, left)
+                rv = JsonPathEngine._parse_literal(right)
+                if not JsonPathEngine._compare(lv, rv, op):
+                    ok = False
+                    break
+            if ok:
+                return True
+        return False
+
+    @staticmethod
+    def _parse_literal(text: str):
+        text = text.strip()
+        if (text.startswith('"') and text.endswith('"')) or (text.startswith("'") and text.endswith("'")):
+            return text[1:-1]
+        low = text.lower()
+        if low == "true":
+            return True
+        if low == "false":
+            return False
+        if low == "null":
+            return None
+        try:
+            if re.fullmatch(r"-?\d+", text):
+                return int(text)
+            if re.fullmatch(r"-?\d+\.\d+", text):
+                return float(text)
+        except ValueError:
+            pass
+        return text
+
+    @staticmethod
+    def _compare(lv, rv, op: str) -> bool:
+        try:
+            if op == "==":
+                return lv == rv
+            if op == "!=":
+                return lv != rv
+            if lv is None or rv is None:
+                return False
+            if op == ">":
+                return lv > rv
+            if op == "<":
+                return lv < rv
+            if op == ">=":
+                return lv >= rv
+            if op == "<=":
+                return lv <= rv
+        except TypeError:
+            return False
+        return False
 
     @staticmethod
     def query(obj: Any, path: str) -> list:
@@ -586,6 +707,15 @@ class JsonPathEngine:
                 results = []
                 for val in obj.values():
                     results.extend(JsonPathEngine._eval(val, tokens, pos + 1))
+                return results
+            return []
+        elif kind == "filter":
+            expr = token[1]
+            if isinstance(obj, (list, tuple)):
+                results = []
+                for item in obj:
+                    if JsonPathEngine._eval_filter(item, expr):
+                        results.extend(JsonPathEngine._eval(item, tokens, pos + 1))
                 return results
             return []
         elif kind == "deep":
@@ -676,7 +806,8 @@ def _eval_single_rule(rule, content, base_url="", js_lib="", variables=None):
         try:
             return run_js(js_code, result="", variables=variables or {},
                           base_url=base_url, js_lib=js_lib)
-        except _JsRuleUnsupported:
+        except _JsRuleUnsupported as exc:
+            logger.debug("JS rule unsupported: %s — %s", rule[:60], exc)
             return None
 
     # {{result.fieldName}} — 直接 JSON 字段提取
@@ -951,6 +1082,11 @@ _DEFAULT_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
+# 抓取节流与重试（可用环境变量覆盖）
+FETCH_DELAY_SECONDS = float(os.environ.get("MYBOOKS_FETCH_DELAY", "0.2"))
+FETCH_RETRIES = int(os.environ.get("MYBOOKS_FETCH_RETRIES", "2"))
+FETCH_RETRY_BACKOFF = 1.0
+
 
 def build_source_session(source=None):
     """根据书源创建一个带默认头的 requests.Session。"""
@@ -984,12 +1120,24 @@ def fetch_url(url: str, session=None, source=None, encoding: str = "") -> str:
             parsed.params, safe_query, safe_fragment,
         ))
 
-    try:
-        resp = session.get(url, headers=hdrs or None, timeout=30)
-        resp.raise_for_status()
-    except Exception as exc:
-        logger.error("HTTP request failed: %s — %s", url, exc)
-        raise
+    # 节流：避免对目标站连续轰炸（可用 MYBOOKS_FETCH_DELAY 覆盖，0 关闭）
+    if FETCH_DELAY_SECONDS > 0:
+        time.sleep(FETCH_DELAY_SECONDS)
+
+    last_exc = None
+    for attempt in range(FETCH_RETRIES + 1):
+        try:
+            resp = session.get(url, headers=hdrs or None, timeout=30)
+            resp.raise_for_status()
+            break
+        except Exception as exc:
+            last_exc = exc
+            logger.error("HTTP request failed: %s — %s (attempt %d/%d)", url, exc, attempt + 1, FETCH_RETRIES + 1)
+            if attempt < FETCH_RETRIES:
+                time.sleep(FETCH_RETRY_BACKOFF * (2 ** attempt))
+    else:
+        raise last_exc
+
     if encoding:
         resp.encoding = encoding
     elif not resp.encoding or resp.encoding.lower() in ("iso-8859-1", "iso8859-1"):
@@ -1027,19 +1175,19 @@ def _parse_search_url(search_url_str: str, base_url: str = ""):
     return rule, {}
 
 
-def search_books(source, keyword: str, session=None) -> list[dict[str, str]]:
+def search_books(source, keyword: str, session=None, page: int = 1) -> list[dict[str, str]]:
     if session is None:
         session = build_source_session(source)
 
     # ── 1. 解析 searchUrl（支持 @js: 前缀） ──
     raw_search_url = source.searchUrl or source.bookSourceUrl
     url_part, options = _parse_search_url(raw_search_url)
-    search_url = render_url_template(url_part, key=keyword, page=1, baseUrl=source.bookSourceUrl)
+    search_url = render_url_template(url_part, key=keyword, page=page, baseUrl=source.bookSourceUrl)
 
     # Handle @js: searchUrl — evaluate JS to get actual URL
     if search_url.startswith("@js:") or search_url.startswith("@js:\n"):
         try:
-            variables = {"key": keyword, "page": 1, "baseUrl": source.bookSourceUrl}
+            variables = {"key": keyword, "page": page, "baseUrl": source.bookSourceUrl}
             evaled = extract_single(search_url, "", base_url=source.bookSourceUrl,
                                     js_lib=source.jsLib, variables=variables)
             if evaled:
@@ -1070,7 +1218,7 @@ def search_books(source, keyword: str, session=None) -> list[dict[str, str]]:
     method = str(options.get("method", "GET")).upper()
 
     if method == "POST":
-        body = render_url_template(str(options.get("body", "")), key=keyword, page=1)
+        body = render_url_template(str(options.get("body", "")), key=keyword, page=page)
         try:
             data = body.encode(charset) if charset else body.encode("utf-8")
             resp = session.post(search_url, data=data, timeout=30)
@@ -1080,13 +1228,13 @@ def search_books(source, keyword: str, session=None) -> list[dict[str, str]]:
             raise
         if charset:
             resp.encoding = charset
-        elif resp.apparent_encoding:
+        elif not resp.encoding or resp.encoding.lower() in ("iso-8859-1", "iso8859-1"):
             resp.encoding = resp.apparent_encoding
         html = resp.text
     else:
         html = fetch_url(search_url, session=session, encoding=charset)
 
-    variables = {"key": keyword, "page": 1, "baseUrl": source.bookSourceUrl}
+    variables = {"key": keyword, "page": page, "baseUrl": source.bookSourceUrl}
     rule = source.ruleSearch
     init_rule = rule.init if hasattr(rule, "init") else ""
 
@@ -1385,8 +1533,8 @@ def parse_explore_categories(explore_url: str) -> list[dict]:
     return out
 
 
-def fetch_explore(source, url: str, session=None) -> list[dict[str, str]]:
-    """从分类 URL 获取书籍列表，使用 ruleExplore（fallback 到 ruleSearch）。"""
+def fetch_explore(source, url: str, session=None, max_pages: int = 50) -> list[dict[str, str]]:
+    """从分类 URL 获取书籍列表，使用 ruleExplore（fallback 到 ruleSearch），支持 nextExploreUrl 分页。"""
     if session is None:
         session = build_source_session(source)
     variables = {"baseUrl": source.bookSourceUrl, "page": 1}
@@ -1395,6 +1543,7 @@ def fetch_explore(source, url: str, session=None) -> list[dict[str, str]]:
     explore_raw = getattr(source, "ruleExplore", {}) or {}
     search_raw = source.ruleSearch
     list_rule = (explore_raw.get("bookList") if isinstance(explore_raw, dict) else None) or search_raw.bookList
+    next_rule = (explore_raw.get("nextExploreUrl") or "") if isinstance(explore_raw, dict) else ""
     item_rules = {}
     if isinstance(explore_raw, dict):
         for field in ("name", "author", "kind", "wordCount", "lastChapter", "intro", "coverUrl", "bookUrl"):
@@ -1407,13 +1556,43 @@ def fetch_explore(source, url: str, session=None) -> list[dict[str, str]]:
             if rv:
                 item_rules[field] = rv
 
-    target_url = _resolve_url(url, source.bookSourceUrl)
-    try:
-        html = fetch_url(target_url, session=session)
-    except Exception as exc:
-        logger.error("fetch_explore HTTP failed: %s — %s", target_url, exc)
-        return []
+    books = []
+    seen_urls = set()
+    queue = deque([_resolve_url(url, source.bookSourceUrl)])
+    pages = 0
+    while queue and pages < max_pages:
+        target_url = queue.popleft()
+        if not target_url or target_url in seen_urls:
+            continue
+        seen_urls.add(target_url)
+        pages += 1
+        try:
+            html = fetch_url(target_url, session=session)
+        except Exception as exc:
+            logger.error("fetch_explore HTTP failed: %s — %s", target_url, exc)
+            continue
 
-    return extract_list(list_rule, item_rules, html,
-                        base_url=source.bookSourceUrl, js_lib=source.jsLib,
-                        variables=variables)
+        page_books = extract_list(list_rule, item_rules, html,
+                                  base_url=source.bookSourceUrl, js_lib=source.jsLib,
+                                  variables=variables)
+        books.extend(page_books)
+
+        if next_rule:
+            try:
+                from bs4 import BeautifulSoup as _BS
+                soup = _BS(html, "html.parser")
+                parsed = parse_selector(next_rule)
+                if parsed["type"] == "css":
+                    for tag in soup.select(parsed["selector"]):
+                        val = _resolve_css_attr(tag, parsed.get("attr", "href"))
+                        if val and val not in seen_urls:
+                            queue.append(_resolve_url(val, target_url))
+                elif parsed["type"] == "legado":
+                    nodes, attr = legado_select(soup, next_rule)
+                    for node in nodes:
+                        val = _legado_extract_attr(node, attr or "href")
+                        if val and val not in seen_urls:
+                            queue.append(_resolve_url(val, target_url))
+            except Exception as exc:
+                logger.warning("nextExploreUrl parse failed: %s — %s", next_rule, exc)
+    return books

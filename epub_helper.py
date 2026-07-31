@@ -92,12 +92,17 @@ def _make_chapter_xhtml(title: str, content_html: str, index: int) -> epub.EpubH
 
 
 def _download_cover(session: requests.Session, cover_url: str,
-                    output_dir: str) -> Optional[str]:
+                    output_dir: str, referer: str = "") -> Optional[str]:
     """下载封面图片，返回本地路径。"""
     if not cover_url:
         return None
     try:
-        resp = session.get(cover_url, timeout=15)
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                 "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                 "Chrome/120.0.0.0 Safari/537.36"}
+        if referer:
+            headers["Referer"] = referer
+        resp = session.get(cover_url, headers=headers, timeout=15)
         resp.raise_for_status()
         content_type = resp.headers.get("content-type", "")
         ext = ".jpg"
@@ -117,10 +122,62 @@ def _download_cover(session: requests.Session, cover_url: str,
         return None
 
 
+def _inline_images(soup, session: requests.Session, book, chapter_url: str = "",
+                   referer: str = "") -> None:
+    """下载正文中的 <img> 并内嵌为 EpubImage，重写 src 为本地路径。"""
+    if soup is None:
+        return
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                             "AppleWebKit/537.36 (KHTML, like Gecko) "
+                             "Chrome/120.0.0.0 Safari/537.36"}
+    if referer:
+        headers["Referer"] = referer
+    for i, img in enumerate(soup.find_all("img")):
+        src = (img.get("src") or "").strip()
+        if not src or src.startswith("data:"):
+            continue
+        if not src.startswith(("http://", "https://", "//")):
+            if chapter_url:
+                src = urllib.parse.urljoin(chapter_url, src)
+            else:
+                continue
+        if src.startswith("//"):
+            src = "https:" + src
+        try:
+            resp = session.get(src, headers=headers, timeout=15)
+            resp.raise_for_status()
+        except Exception as exc:
+            logger.warning("正文图片下载失败: %s — %s", src, exc)
+            continue
+        content_type = resp.headers.get("content-type", "image/jpeg")
+        ext = ".jpg"
+        if "png" in content_type:
+            ext = ".png"
+        elif "gif" in content_type:
+            ext = ".gif"
+        elif "webp" in content_type:
+            ext = ".webp"
+        elif "svg" in content_type:
+            ext = ".svg"
+        fname = f"image_{i:04d}{ext}"
+        try:
+            item = epub.EpubImage(
+                uid=f"img_{i}",
+                file_name=f"images/{fname}",
+                media_type=content_type.split(";")[0].strip() or "image/jpeg",
+                content=resp.content,
+            )
+            book.add_item(item)
+            img["src"] = f"images/{fname}"
+        except Exception as exc:
+            logger.warning("正文图片内嵌失败: %s — %s", src, exc)
+
+
 def generate_epub(title: str, author: str,
                   chapters: list[dict],
                   cover_url: str = "",
-                  output_path: str = "") -> str:
+                  output_path: str = "",
+                  referer: str = "") -> str:
     """生成 EPUB 文件。
 
     Args:
@@ -167,7 +224,7 @@ def generate_epub(title: str, author: str,
 
     if cover_url:
         tmp_dir = os.path.dirname(output_path) or "."
-        cover_path = _download_cover(session, cover_url, tmp_dir)
+        cover_path = _download_cover(session, cover_url, tmp_dir, referer)
         if cover_path and os.path.exists(cover_path):
             with open(cover_path, "rb") as f:
                 cover_content = f.read()
@@ -180,7 +237,12 @@ def generate_epub(title: str, author: str,
     for i, ch in enumerate(chapters, 1):
         ch_title = ch.get("title", f"第{i}章")
         ch_content = ch.get("content", "")
+        ch_url = ch.get("url", "")
         ch_html = _clean_html_for_epub(ch_content)
+        if ch_url:
+            soup = BeautifulSoup(ch_html, "lxml")
+            _inline_images(soup, session, book, chapter_url=ch_url, referer=referer)
+            ch_html = str(soup)
         chapter_item = _make_chapter_xhtml(ch_title, ch_html, i)
         chapter_item.add_item(css)
         book.add_item(chapter_item)

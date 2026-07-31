@@ -16,7 +16,10 @@ import os
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from typing import Any
+
+os.environ.setdefault("MYBOOKS_FETCH_DELAY", "0")  # 测试关闭抓取节流
 
 # ── 将被测模块加入路径 ──────────────────────────────────────────
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -277,6 +280,31 @@ class TestJsonPathEngine(unittest.TestCase):
         result = JsonPathEngine.query_first(JSON_BOOK_LIST, "$.nonexistent")
         self.assertIsNone(result)
 
+    def test_filter_equal(self):
+        data = {"books": [{"title": "A", "pages": 100}, {"title": "B", "pages": 200}]}
+        result = JsonPathEngine.query(data, '$.books[?(@.title == "A")].pages')
+        self.assertEqual(result, ["100"])
+
+    def test_filter_gt_and(self):
+        data = {"books": [{"title": "A", "pages": 300}, {"title": "B", "pages": 100}, {"title": "C", "pages": 150}]}
+        result = JsonPathEngine.query(data, "$.books[?(@.pages > 120 && @.pages < 250)].title")
+        self.assertEqual(set(result), {"C"})
+
+    def test_filter_or(self):
+        data = {"items": [{"k": "x"}, {"k": "y"}, {"k": "z"}]}
+        result = JsonPathEngine.query(data, '$$.items[?(@.k == "x" || @.k == "z")].k'.replace("$$", "$"))
+        self.assertEqual(set(result), {"x", "z"})
+
+    def test_filter_ne(self):
+        data = {"items": [{"k": "a"}, {"k": "b"}]}
+        result = JsonPathEngine.query(data, '$.items[?(@.k != "a")].k')
+        self.assertEqual(result, ["b"])
+
+    def test_filter_no_match(self):
+        data = {"items": [{"k": "a"}]}
+        result = JsonPathEngine.query(data, '$.items[?(@.k == "zzz")]')
+        self.assertEqual(result, [])
+
 
 # ═════════════════════════════════════════════════════════════════
 # Legado 选择器测试 (移植自 talebook fork)
@@ -322,6 +350,12 @@ class TestLegadoSelector(unittest.TestCase):
         html = '<a href="/book/123">title</a>'
         result = legado_extract_one("a@href##/book/(\\d+)##$1", html)
         self.assertEqual(result, "123")
+
+    def test_tail_regex_no_match_keeps_value(self):
+        """3 段 tail regex 无匹配时保留原值（不静默清空）"""
+        html = '<a href="/book/abc">title</a>'
+        result = legado_extract_one("a@href##/book/(\\d+)##$1", html)
+        self.assertEqual(result, "/book/abc")
 
     def test_owntext_attr(self):
         html = '<div class="x">prefix<span>ignore</span>suffix</div>'
@@ -617,6 +651,19 @@ class TestJsRuntime(unittest.TestCase):
         result = run_js("result === 'yes'", result="yes")
         self.assertEqual(result, "true")
 
+    def test_unbounded_loop_rejected(self):
+        """无界循环规则直接拒绝，避免挂死 worker 线程"""
+        with self.assertRaises(JsRuleUnsupported):
+            run_js("while(true){}")
+        with self.assertRaises(JsRuleUnsupported):
+            run_js("while( 1 ) { }")
+        with self.assertRaises(JsRuleUnsupported):
+            run_js("for(;;){}")
+
+    def test_oversized_code_rejected(self):
+        with self.assertRaises(JsRuleUnsupported):
+            run_js("result = '" + "x" * 60000 + "'")
+
 
 # ═════════════════════════════════════════════════════════════════
 # Legado + JS 集成测试
@@ -849,6 +896,95 @@ class TestFullFlow(unittest.TestCase):
             self.assertEqual(len(toc), 2)
             self.assertEqual(toc[0].get("isVolume"), "第一卷")
             self.assertEqual(toc[1].get("isVolume"), "")
+
+
+# ═════════════════════════════════════════════════════════════════
+# 异步搜索服务测试
+# ═════════════════════════════════════════════════════════════════
+
+class TestSearchTaskService(unittest.TestCase):
+    def test_create_task_and_status(self):
+        """创建异步任务并轮询到完成"""
+        import time as _time
+        import search_task_service as sts_mod
+        from unittest.mock import patch
+
+        fake = [{"name": "测试书", "bookUrl": "http://example.com/1"}]
+        with patch.object(sts_mod, "search_books", return_value=fake):
+            svc = sts_mod.SearchTaskService()
+            res = svc.create_task("测试", [{"name": "源1", "source": object()}])
+            self.assertTrue(res.get("task_id"))
+            deadline = _time.time() + 10
+            status = None
+            while _time.time() < deadline:
+                status = svc.get_status(res["task_id"])
+                if status and status["finished"]:
+                    break
+                _time.sleep(0.05)
+            self.assertIsNotNone(status)
+            self.assertTrue(status["finished"])
+            self.assertEqual(len(status["results"]), 1)
+            self.assertEqual(status["results"][0]["books"][0]["name"], "测试书")
+
+    def test_failed_source_reported(self):
+        """源抛异常时标记 failed 并计入 partial"""
+        import time as _time
+        import search_task_service as sts_mod
+        from unittest.mock import patch
+
+        with patch.object(sts_mod, "search_books", side_effect=RuntimeError("boom")):
+            svc = sts_mod.SearchTaskService()
+            res = svc.create_task("测试", [{"name": "源1", "source": object()}])
+            deadline = _time.time() + 10
+            status = None
+            while _time.time() < deadline:
+                status = svc.get_status(res["task_id"])
+                if status and status["finished"]:
+                    break
+                _time.sleep(0.05)
+            self.assertTrue(status["finished"])
+            self.assertEqual(len(status["partial"]), 1)
+            self.assertIn("boom", status["partial"][0]["error"])
+
+
+# ═════════════════════════════════════════════════════════════════
+# EPUB 图片内嵌测试
+# ═════════════════════════════════════════════════════════════════
+
+class TestEpubInlineImages(unittest.TestCase):
+    def test_image_inlined_into_epub(self):
+        """正文图片下载并内嵌，src 重写为本地路径"""
+        import zipfile
+        from epub_helper import generate_epub
+
+        class MockImgResp:
+            status_code = 200
+            headers = {"content-type": "image/jpeg"}
+            content = b"\xff\xd8\xff\xe0fakejpeg"
+
+            def raise_for_status(self):
+                return None
+
+        class MockImgSession:
+            headers = {}
+
+            def get(self, url, **kwargs):
+                return MockImgResp()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "test.epub")
+            with unittest.mock.patch("epub_helper.requests.Session", return_value=MockImgSession()):
+                generate_epub(
+                    "测试书", "作者",
+                    [{"title": "第1章", "content": '<p>正文<img src="http://example.com/i.jpg"/></p>',
+                      "url": "http://example.com/ch1"}],
+                    output_path=out,
+                )
+            with zipfile.ZipFile(out) as zf:
+                names = zf.namelist()
+                xhtml = zf.read("EPUB/chapter_0001.xhtml").decode("utf-8")
+                self.assertIn("images/image_0000.jpg", xhtml)
+                self.assertIn("EPUB/images/image_0000.jpg", names)
 
 
 # ═════════════════════════════════════════════════════════════════

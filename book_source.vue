@@ -59,7 +59,7 @@
           <v-card-title class="py-2 text-subtitle-1 d-flex align-center">
             <span>{{ $t('bookSource.resultTitle') }} ({{ searchResults.length }})</span>
             <v-spacer></v-spacer>
-            <v-btn small color="success" @click="downloadAll" :loading="downloadingAll">
+            <v-btn small color="success" @click="showConfirmAll = true" :loading="downloadingAll">
               <v-icon left small>mdi-download-multiple</v-icon> {{ $t('bookSource.downloadAll') }}
             </v-btn>
           </v-card-title>
@@ -67,6 +67,7 @@
           <v-simple-table dense>
             <thead>
               <tr>
+                <th class="text-center">{{ $t('bookSource.colCover') }}</th>
                 <th>{{ $t('bookSource.colName') }}</th>
                 <th>{{ $t('bookSource.colAuthor') }}</th>
                 <th>{{ $t('bookSource.colSource') }}</th>
@@ -75,7 +76,13 @@
               </tr>
             </thead>
             <tbody>
-              <tr v-for="(book, i) in searchResults" :key="book.bookUrl + '|' + book.sourceName">
+              <tr v-for="(book, i) in pagedResults" :key="book.bookUrl + '|' + book.sourceName">
+                <td class="text-center">
+                  <v-avatar size="32" tile>
+                    <v-img v-if="book.coverUrl" :src="book.coverUrl" contain></v-img>
+                    <v-icon v-else>mdi-book-outline</v-icon>
+                  </v-avatar>
+                </td>
                 <td class="font-weight-medium">{{ book.name }}</td>
                 <td>{{ book.author }}</td>
                 <td><v-chip x-small color="primary" outlined>{{ book.sourceName }}</v-chip></td>
@@ -85,10 +92,17 @@
                     :loading="downloadingMap[book.bookUrl + '|' + book.sourceName]">
                     <v-icon x-small left>mdi-download</v-icon> {{ $t('bookSource.download') }}
                   </v-btn>
+                  <v-btn x-small color="success" outlined class="ml-1" @click="generateEpub(book)"
+                    :loading="generatingMap[book.bookUrl + '|' + book.sourceName]">
+                    <v-icon x-small left>mdi-file-export</v-icon> {{ $t('bookSource.generate') }}
+                  </v-btn>
                 </td>
               </tr>
             </tbody>
           </v-simple-table>
+          <div class="d-flex justify-center pt-2" v-if="pageCount > 1">
+            <v-pagination v-model="pageNum" :length="pageCount" total-visible="5" dense></v-pagination>
+          </div>
         </v-card>
       </transition>
 
@@ -104,10 +118,21 @@
                 <v-list-item-title>
                   {{ task.name }}
                   <v-chip v-if="task.source" x-small color="primary" outlined class="ml-1">{{ task.source }}</v-chip>
+                  <v-chip v-if="task.kind === 'epub'" x-small color="success" outlined class="ml-1">
+                    {{ $t('bookSource.generate') }}
+                  </v-chip>
                 </v-list-item-title>
                 <v-progress-linear :value="task.progress" height="6" rounded class="mt-1"></v-progress-linear>
               </v-list-item-content>
-              <v-list-item-action>
+              <v-list-item-action class="align-center">
+                <v-btn v-if="task === activeTask" x-small color="warning" text @click="cancelTask(task)"
+                  :title="$t('bookSource.cancelTask')">
+                  <v-icon x-small>mdi-close-circle</v-icon>
+                </v-btn>
+                <a v-if="task.epubUrl" :href="task.epubUrl" target="_blank"
+                  class="v-btn v-btn--x-small v-btn--text success--text mx-1">
+                  <v-icon x-small left>mdi-download</v-icon>{{ $t('bookSource.downloadFile') }}
+                </a>
                 <v-chip :color="task.status === 'done' ? 'success' : task.status === 'error' ? 'error' : 'primary'"
                   x-small>
                   {{ task.msg || task.status }}
@@ -292,6 +317,21 @@
       </v-card>
     </v-dialog>
 
+    <!-- 批量下载确认 -->
+    <v-dialog v-model="showConfirmAll" max-width="420">
+      <v-card>
+        <v-card-title class="text-subtitle-1">{{ $t('bookSource.confirmDownloadAllTitle') }}</v-card-title>
+        <v-card-text>
+          {{ $t('bookSource.confirmDownloadAllMsg', { n: searchResults.length }) }}
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer></v-spacer>
+          <v-btn text @click="showConfirmAll = false">{{ $t('bookSource.cancel') }}</v-btn>
+          <v-btn color="primary" @click="downloadAll">{{ $t('bookSource.downloadAll') }}</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <!-- 测试结果 -->
     <v-dialog v-model="showTestDialog" max-width="600">
       <v-card>
@@ -340,9 +380,13 @@ export default {
       tasks: [],
       downloadingAll: false,
       downloadingMap: {},
+      generatingMap: {},
       pollTimer: null,
       searchTimer: null,
       activeTask: null,
+      showConfirmAll: false,
+      pageNum: 1,
+      pageSize: 50,
 
       sources: [],
       sLoading: false,
@@ -386,6 +430,18 @@ export default {
         (s.bookSourceUrl || '').toLowerCase().includes(q) ||
         (s.bookSourceGroup || '').toLowerCase().includes(q)
       );
+    },
+    pagedResults() {
+      const start = (this.pageNum - 1) * this.pageSize;
+      return this.searchResults.slice(start, start + this.pageSize);
+    },
+    pageCount() {
+      return Math.max(1, Math.ceil(this.searchResults.length / this.pageSize));
+    },
+  },
+  watch: {
+    searchResults() {
+      this.pageNum = 1;
     },
   },
   created() {
@@ -700,11 +756,67 @@ export default {
     },
 
     async downloadAll() {
+      this.showConfirmAll = false;
       this.downloadingAll = true;
       for (const book of this.searchResults) {
         await this.downloadAndWait(book);
       }
       this.downloadingAll = false;
+    },
+
+    async generateEpub(book) {
+      if (this.activeTask) {
+        this.showMsg(this.$t('bookSource.downloadBusy'), 'error');
+        return;
+      }
+      const taskKey = book.bookUrl + '|' + book.sourceName;
+      if (this.generatingMap[taskKey]) return;
+      const task = {
+        name: book.name,
+        source: book.sourceName,
+        progress: 0,
+        status: 'started',
+        msg: this.$t('bookSource.taskStarting'),
+        kind: 'epub',
+        taskKey,
+      };
+      this.tasks.push(task);
+      this.$set(this.generatingMap, taskKey, true);
+      try {
+        const rsp = await this.$backend('/toolbox/book_source/generate_epub', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            source: book.sourceName,
+            bookUrl: book.bookUrl,
+            bookTitle: book.name,
+            maxChapters: 9999,
+          }),
+        });
+        if (rsp.err === 'ok') {
+          this.activeTask = task;
+          this.startPoll(task);
+        } else {
+          task.status = 'error';
+          task.msg = rsp.msg || this.$t('bookSource.downloadFailed');
+          this.$delete(this.generatingMap, taskKey);
+        }
+      } catch (e) {
+        task.status = 'error';
+        task.msg = String(e);
+        this.$delete(this.generatingMap, taskKey);
+      }
+    },
+
+    async cancelTask(task) {
+      if (!task.taskId) return;
+      try {
+        await this.$backend('/toolbox/book_source/cancel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ task_id: task.taskId }),
+        });
+      } catch { /* 取消失败由后端任务自然结束 */ }
     },
 
     startPoll(task) {
@@ -714,17 +826,25 @@ export default {
           const rsp = await this.$backend('/toolbox/book_source/progress');
           if (rsp.err === 'ok' && rsp.data) {
             task.progress = rsp.data.progress || 0;
+            task.taskId = rsp.data.task_id || task.taskId;
             const pd = rsp.data.progress_data;
             task.msg = (pd && pd.status) || '';
             if (rsp.data.status === 'completed') {
               this.stopPoll();
               task.status = 'done';
               task.progress = 100;
-              task.msg = this.$t('bookSource.taskDone');
+              task.msg = task.kind === 'epub'
+                ? this.$t('bookSource.generateDone')
+                : this.$t('bookSource.taskDone');
+              if (task.kind === 'epub') {
+                task.epubUrl = '/api/toolbox/book_source/download_epub';
+                this.$delete(this.generatingMap, task.taskKey || '');
+              }
             } else if (rsp.data.status === 'failed') {
               this.stopPoll();
               task.status = 'error';
               task.msg = rsp.msg || this.$t('bookSource.taskFailed');
+              if (task.kind === 'epub') this.$delete(this.generatingMap, task.taskKey || '');
             }
           } else if (rsp.err === 'task.not_found') {
             if (task.status === 'started') {
@@ -733,6 +853,7 @@ export default {
               task.msg = this.$t('bookSource.taskDone');
             }
             this.stopPoll();
+            if (task.kind === 'epub') this.$delete(this.generatingMap, task.taskKey || '');
           }
         } catch { /* polling error, continue */ }
       }, 2000);

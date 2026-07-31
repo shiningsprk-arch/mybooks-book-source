@@ -4,12 +4,14 @@ book_source_tool — 书源管理工具（MyBooks Toolbox 集成）
 提供书源的 CRUD、搜索测试、下载/EPUB 生成、ZIP 导入等功能。
 """
 
+import ipaddress
 import json
 import logging
 import os
 import re
 import socket
 import tempfile
+import threading
 import traceback
 from typing import Callable, Optional
 from urllib.parse import urlparse, urlunparse
@@ -35,6 +37,10 @@ from webserver.toolbox.book_source_engine import (
 from webserver.toolbox.book_source_engine.epub_helper import generate_epub as _generate_epub
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+               "AppleWebKit/537.36 (KHTML, like Gecko) "
+               "Chrome/125.0.0.0 Safari/537.36")
 
 
 def _iter_all_rule_strings(item: dict):
@@ -65,7 +71,12 @@ class BookSourceTool(BaseTool):
 
     service_item_name = "书源管理"
 
-    _last_task_id: Optional[int] = None
+    # 每个用户最近一次下载/生成任务（多用户互不干扰）
+    _last_task_ids: dict[int, int] = {}
+    _tasks_lock = threading.Lock()
+
+    # 书源文件读写锁（防止并发保存互相覆盖）
+    _sources_lock = threading.RLock()
 
     @staticmethod
     def info() -> dict:
@@ -73,7 +84,7 @@ class BookSourceTool(BaseTool):
             "tool_id": "book_source",
             "name": _("书源管理"),
             "description": _("书源管理工具，支持添加/编辑/测试/下载书源"),
-            "revision": "1.1.0",
+            "revision": "1.2.0",
             "author": "MyBooks",
             "publish_date": "2025-07-01",
         }
@@ -81,15 +92,44 @@ class BookSourceTool(BaseTool):
     # ── 并发控制 ────────────────────────────────────────────────
 
     @classmethod
-    def is_running(cls) -> bool:
-        task = cls.get_last_task()
+    def is_running(cls, user_id: int = 1) -> bool:
+        task = cls.get_last_task(user_id)
         return bool(task and task.get("status") == BackgroundTask.STATUS_RUNNING)
 
     @classmethod
-    def get_last_task(cls) -> Optional[dict]:
-        if cls._last_task_id is None:
+    def get_last_task(cls, user_id: int = 1) -> Optional[dict]:
+        with cls._tasks_lock:
+            task_id = cls._last_task_ids.get(user_id)
+        if task_id is None:
             return None
-        return BackgroundService().get_task(cls._last_task_id)
+        return BackgroundService().get_task(task_id)
+
+    @classmethod
+    def set_last_task(cls, user_id: int, task_id: int):
+        with cls._tasks_lock:
+            cls._last_task_ids[user_id] = task_id
+
+    @staticmethod
+    def _is_safe_url(url: str) -> bool:
+        """SSRF 防护：仅允许公网 http/https，拒绝私有/回环/链路本地等地址。"""
+        if not url:
+            return False
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            return False
+        try:
+            infos = socket.getaddrinfo(parsed.hostname, None, type=socket.SOCK_STREAM)
+        except OSError:
+            return False
+        for info in infos:
+            try:
+                ip = ipaddress.ip_address(info[4][0])
+            except ValueError:
+                return False
+            if (ip.is_private or ip.is_loopback or ip.is_link_local
+                    or ip.is_multicast or ip.is_reserved or ip.is_unspecified):
+                return False
+        return True
 
     # ── 书源 CRUD ──────────────────────────────────────────────
 
@@ -110,41 +150,44 @@ class BookSourceTool(BaseTool):
     @AsyncService.register_function
     def add_source(self, source_data: dict) -> dict:
         """添加或更新一个书源。"""
-        sources = self._load_sources()
-        new_source = BookSource.from_dict(source_data)
-        for i, s in enumerate(sources):
-            if s.bookSourceName == new_source.bookSourceName:
-                sources[i] = new_source
-                self._save_sources(sources)
-                return {"status": "updated", "name": new_source.bookSourceName}
-        sources.append(new_source)
-        self._save_sources(sources)
-        return {"status": "added", "name": new_source.bookSourceName}
+        with self._sources_lock:
+            sources = self._load_sources()
+            new_source = BookSource.from_dict(source_data)
+            for i, s in enumerate(sources):
+                if s.bookSourceName == new_source.bookSourceName:
+                    sources[i] = new_source
+                    self._save_sources(sources)
+                    return {"status": "updated", "name": new_source.bookSourceName}
+            sources.append(new_source)
+            self._save_sources(sources)
+            return {"status": "added", "name": new_source.bookSourceName}
 
     @AsyncService.register_function
     def delete_source(self, name: str) -> dict:
         """删除一个书源。"""
-        sources = self._load_sources()
-        before = len(sources)
-        sources = [s for s in sources if s.bookSourceName != name]
-        if len(sources) == before:
-            return {"status": "not_found", "name": name}
-        self._save_sources(sources)
-        return {"status": "deleted", "name": name}
+        with self._sources_lock:
+            sources = self._load_sources()
+            before = len(sources)
+            sources = [s for s in sources if s.bookSourceName != name]
+            if len(sources) == before:
+                return {"status": "not_found", "name": name}
+            self._save_sources(sources)
+            return {"status": "deleted", "name": name}
 
     @AsyncService.register_function
     def toggle_source(self, name: str, enabled: bool = None) -> dict:
         """启用/禁用一个书源。"""
-        sources = self._load_sources()
-        for s in sources:
-            if s.bookSourceName == name:
-                if enabled is not None:
-                    s.enabled = enabled
-                else:
-                    s.enabled = not s.enabled
-                self._save_sources(sources)
-                return {"status": "toggled", "name": name, "enabled": s.enabled}
-        return {"status": "not_found", "name": name}
+        with self._sources_lock:
+            sources = self._load_sources()
+            for s in sources:
+                if s.bookSourceName == name:
+                    if enabled is not None:
+                        s.enabled = enabled
+                    else:
+                        s.enabled = not s.enabled
+                    self._save_sources(sources)
+                    return {"status": "toggled", "name": name, "enabled": s.enabled}
+            return {"status": "not_found", "name": name}
 
     # ── 书源校验 ──────────────────────────────────────────────
 
@@ -206,6 +249,12 @@ class BookSourceTool(BaseTool):
             tags.append("content")
         if raw.get("exploreUrl"):
             tags.append("explore")
+        if raw.get("loginUrl"):
+            tags.append("login-needed")
+        if rule_content.get("webJs"):
+            tags.append("webjs-unsupported")
+        if rule_content.get("imageStyle"):
+            tags.append("image-style")
         values = list(BookSourceTool._iter_rule_values(raw))
         if any(v.strip().startswith(("$", "@json:")) for v in values):
             tags.append("json")
@@ -341,8 +390,11 @@ class BookSourceTool(BaseTool):
     @AsyncService.register_function
     def import_sources_from_url(self, url: str) -> dict:
         """从远程 URL 批量导入书源（Legado 书源订阅）。跳过引擎不兼容的书源。"""
+        if not self._is_safe_url(url):
+            return {"status": "fetch_failed", "added": 0,
+                    "message": "URL 无效或指向内网地址（已阻止）"}
         try:
-            resp = requests.get(url, timeout=30)
+            resp = requests.get(url, timeout=30, headers={"User-Agent": _DEFAULT_UA})
             resp.raise_for_status()
             data = resp.json()
         except Exception as exc:
@@ -532,6 +584,8 @@ class BookSourceTool(BaseTool):
         source = self._find_source(source_name)
         if not source:
             raise ValueError(_("书源不存在: %s") % source_name)
+        if not self._is_safe_url(url):
+            raise ValueError(_("分类 URL 无效或指向内网地址（已阻止）"))
         return fetch_explore(source, url)
 
     # ── 下载 ────────────────────────────────────────────────────
@@ -552,7 +606,7 @@ class BookSourceTool(BaseTool):
             raise ValueError(_("书源不存在: %s") % source_name)
 
         task_id = self.create_task({"progress": 0, "status": _("初始化")})
-        BookSourceTool._last_task_id = task_id
+        self.set_last_task(user_id, task_id)
         try:
             self._do_download(source, book_url, book_title, max_chapters, user_id, task_id)
         except Exception as exc:
@@ -597,7 +651,83 @@ class BookSourceTool(BaseTool):
         return _generate_epub(
             title=title, author=author, chapters=chapters,
             cover_url=cover_url, output_path=output_path,
+            referer=source.bookSourceUrl,
         )
+
+    @AsyncService.register_service
+    def generate_epub_task(
+        self,
+        source_name: str,
+        book_url: str,
+        book_title: str = "",
+        max_chapters: int = 9999,
+        user_id: int = 1,
+    ):
+        """异步生成 EPUB（不入库、不清理文件），完成后路径写入任务进度。"""
+        source = self._find_source(source_name)
+        if not source:
+            raise ValueError(_("书源不存在: %s") % source_name)
+
+        task_id = self.create_task({"progress": 0, "status": _("初始化")})
+        self.set_last_task(user_id, task_id)
+        try:
+            self._do_generate_epub(source, book_url, book_title, max_chapters, task_id)
+        except Exception as exc:
+            logger.error("生成 EPUB 失败: %s", exc, exc_info=True)
+            self.complete_task(task_id, error_message=str(exc))
+
+    def get_last_epub_path(self, user_id: int = 1) -> str:
+        """返回用户最近一次生成任务的 EPUB 文件路径（未完成/失败返回空）。"""
+        task = self.get_last_task(user_id)
+        if not task or task.get("status") != BackgroundTask.STATUS_COMPLETED:
+            return ""
+        progress_data = task.get("progress_data") or {}
+        path = progress_data.get("epub_path", "")
+        if path and os.path.exists(path):
+            return path
+        return ""
+
+    def _do_generate_epub(self, source, book_url: str, book_title: str,
+                          max_chapters: int, task_id: int):
+        """后台生成 EPUB（不导入 Calibre）。"""
+        self.update_task_progress(task_id, 5, {"status": _("获取书籍信息")})
+        detail = fetch_book_info(source, book_url)
+        title = book_title or detail.get("name", _("未知书籍"))
+        author = detail.get("author", _("未知作者"))
+        cover_url = detail.get("coverUrl", "")
+
+        self.update_task_progress(task_id, 15, {"status": _("获取目录")})
+        toc = fetch_toc(source, book_url)
+        to_download = [e for e in toc if not e.get("isVolume")][:max_chapters]
+
+        chapters = []
+        total = len(to_download)
+        for i, entry in enumerate(to_download, 1):
+            ch_title = entry.get("chapterName", _("第 %d 章") % i)
+            ch_url = entry.get("chapterUrl", "")
+            pct = 15 + int(70 * i / total)
+            self.update_task_progress(
+                task_id, pct,
+                {"status": _("下载章节 [%d/%d]: %s") % (i, total, ch_title)},
+            )
+            content = fetch_content(source, ch_url)
+            if content:
+                chapters.append({"title": ch_title, "content": content, "url": ch_url})
+
+        if not chapters:
+            raise ValueError(_("未获取到有效章节内容"))
+
+        self.update_task_progress(task_id, 90, {"status": _("生成 EPUB")})
+        work_dir = self.get_work_dir(book_url)
+        safe_name = re.sub(r'[\\/:*?"<>|]', '_', title)
+        epub_path = os.path.join(work_dir, f"{safe_name}.epub")
+        _generate_epub(
+            title=title, author=author, chapters=chapters,
+            cover_url=cover_url, output_path=epub_path,
+            referer=source.bookSourceUrl,
+        )
+        self.update_task_progress(task_id, 100, {"status": _("生成完成"), "epub_path": epub_path})
+        self.complete_task(task_id)
 
     # ── 内部方法 ────────────────────────────────────────────────
 
@@ -613,10 +743,12 @@ class BookSourceTool(BaseTool):
             return []
 
     def _save_sources(self, sources):
-        """保存书源列表到默认位置。"""
+        """原子保存书源列表到默认位置（tmp + os.replace）。"""
         path = self._sources_path()
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        dump_sources_to_json(sources, path)
+        tmp_path = path + ".tmp"
+        dump_sources_to_json(sources, tmp_path)
+        os.replace(tmp_path, path)
 
     def _sources_path(self) -> str:
         return os.path.join(self.TOOL_DATA_ROOT, self.tool_id(), "sources.json")
@@ -665,6 +797,7 @@ class BookSourceTool(BaseTool):
         _generate_epub(
             title=title, author=author, chapters=chapters,
             cover_url=cover_url, output_path=epub_path,
+            referer=source.bookSourceUrl,
         )
 
         self.update_task_progress(task_id, 95, {"status": _("导入 Calibre")})
