@@ -350,3 +350,40 @@ ormalize_content_text\, adapted from talebook cleaner) |
 ### éªŒè¯
 - 119 å•æµ‹ + 18 å†’çƒŸå…¨è¿‡ï¼ˆè§ä¸Šï¼‰ï¼›`py_compile` å…¨è¿‡ã€‚
 - çœŸæœºç«¯åˆ°ç«¯ï¼ˆdocker + calibre åº“ï¼‰ä¸åœ¨æœ¬æœºå¯æµ‹èŒƒå›´ â†’ ä»¥ L2a æŽ¥å£éªŒè¯ + éƒ¨ç½²æ¸…å•æ›¿ä»£ï¼Œéƒ¨ç½²åŽå»ºè®®è·‘ `tests/integration_smoke.py`ã€‚
+
+---
+
+## Round 2026-08-01 ¡ª PR #43 ÒÑÌá½»ÖÁ PoxenStudio/mybooks
+
+| Ïî | ½á¹û |
+| --- | --- |
+| PR | https://github.com/PoxenStudio/mybooks/pull/43£¨state: open£¬mergeable: clean£© |
+| »ùÏß | develop HEAD e1147268£¨= v4.0.1 ÄÚÈÝ + 2 Ìá½»£©£¬·ÖÖ§ feat/book-source-engine @ c92e5aa1 |
+| ÑéÖ¤ | L2a »ùÏßÖØ½¨Îª develop ºó£º119 µ¥²â + 18 Ã°ÑÌÈ«ÂÌ£¨ÍÆËÍÎÄ¼þ¼¯×îÖÕ¸´Ñé£© |
+| ±ä¸üÎÄ¼þ | 20 ¸ö£º14 ÐÂÔö + 6 ÐÞ¸Ä£¨toolbox.py +2/-1¡¢toolset.py +2/-0¡¢requirements.txt +4/-1¡¢locales ¸÷ +71/-1£©£¬×Ü +6519/-5 |
+| ¹Ø¼üÐÞÕý | ¢Ù »ùÓÚ develop ÖØ´ò²¹¶¡£¨v3.49 °æ»á»ØÍËÉÏÓÎ mimo_tts/bookbarn µÈ¹¤¾ß£©¢Ú vue ÒÆÎ»ÖÁ app/src/pages/toolbox/£¨Nuxt srcDir=src/£©¢Û dukpy>=0.4.0 ÐÞÕýÎª dukpy==0.6.0£¨0.4.0 ²»´æÔÚ£»0.6.0 ÓÐ cp39-314 È«Æ½Ì¨ wheel£¬²»Ó°Ïì docker ¹¹½¨£©¢Ü »»ÐÐ·û CRLF¡úLF Ïû³ý diff ÔëÒô ¢Ý tests/ ½ø PR ËæÉÏÓÎ CI ÔËÐÐ |
+| README | ²å¼þ README + ÒýÇæ README ÐÂÔö£ºtalebook BSD-2-Clause ¹éÊôÉùÃ÷¡¢¼¼ÊõÂ·¾¶¡¢dukpy ¶Ô Docker Ó°ÏìËµÃ÷ |
+| ±¸×¢ | shiningsprk-arch/mybooks Îª×Ô¶¯ fork£»mybooks-book-source Í¬²½ÖÁ Round 8 Ìá½»²»±ä |
+
+---
+
+## Round 2026-08-01 (2) ¡ª PR #43 ÒÑ¹Ø±Õ£¨×÷Õß²»ºÏ²¢ÊéÔ´¹¦ÄÜ£©
+
+| Ïî | ½á¹û |
+| --- | --- |
+| PR #43 | state=closed£¨closed_at 2026-08-01T04:18:33Z£©£¬Î´×·¼ÓÆÀÂÛ |
+| ·ÖÖ§ | fork ÉÏ feat/book-source-engine ÒÑÉ¾³ý£¨ÑéÖ¤ 404£©£¬fork ²Ö¿â±£Áô |
+| Ô­Òò | ×÷ÕßË½ÏÂ¹µÍ¨£ºÊéÔ´¹¦ÄÜ¶¨Î»²»Ì«ÊÊºÏÖ÷ÏßºÏ²¢ |
+| ´úÂëÈ¥Ïò | È«²¿³É¹û±£Áô£ºshiningsprk-arch/mybooks-book-source£¨main @ cc05d257£¬74 ÌõÄ¿Ê÷£©+ ±¾µØ²å¼þÄ¿Â¼ + ¹¹½¨²úÎï£»ÑéÖ¤»ùÏß£¨develop£©Óë²âÊÔ»·¾³ÔÚ Temp Ä¿Â¼¿É¸´ÓÃ |
+| ºóÐøÑ¡Ïî | ×ÔÓÃ²¿Êð£¨README ²¿ÊðÇåµ¥ 8 Ïî / ÒýÇæ README£©£»»ò fork ·ÖÖ§¼ÌÐø¿ª·¢ |
+
+---
+
+## Round 2026-08-01 (3) ¡ª ²Ö¿â¸üÃû
+
+| Ïî | ½á¹û |
+| --- | --- |
+| ¾ÉÃû | shiningsprk-arch/mybooks-book-source |
+| ÐÂÃû | shiningsprk-arch/book-source-engine£¨GitHub ×Ô¶¯ÖØ¶¨Ïò¾ÉÁ´½Ó£© |
+| README | ±êÌâÓë¼ò½é¸üÐÂ£º¶ÀÁ¢×ÔÓÃ¶¨Î» + ²å¼þ°æ/×ÀÃæ°æËµÃ÷ + PR #43 Î´ºÏ²¢ËµÃ÷ |
+| ±£Áô | mybooks-book-source-app.spec£¨exe ²úÎïÃû£©¡¢CHANGESET ÀúÊ·¼ÇÂ¼¡¢¹¹½¨²úÎï²»±ä |

@@ -1,11 +1,15 @@
-# mybooks-book-source
+# book-source-engine
 
-基于 Legado 3.0 规则格式的 MyBooks 书源引擎与书源工具。
+基于 Legado 3.0 规则格式的书源引擎与书源工具（MyBooks 插件版 + 独立桌面版）。
 
 - **规则引擎**：解析 Legado 兼容书源（CSS / JSONPath / XPath / 正则 / URL 模板 / Legado 选择器），提供搜索、书籍详情、目录、正文抓取、分类浏览能力。
 - **内容 fallback**：对 `@js:` 规则失败的站点（如得奇小说 deqixs）提供 Python 级模拟请求链。
 - **EPUB 生成**：抓取正文内嵌图片、封面，生成标准 EPUB。
+- **MyBooks 插件版**：`书源引擎插件/` 目录为完整插件包（引擎 + Toolbox 工具 + 14 条 API 路由 + 管理页面），部署清单见该目录 README。
 - **桌面版**：零依赖本地 Web UI（书源管理 / 多源搜索 / EPUB 生成），可打包为单文件 exe。
+
+> 说明：本项目此前曾以 PR 提交至 [PoxenStudio/mybooks](https://github.com/PoxenStudio/mybooks)（PR #43），
+> 经与作者沟通后未合并（书源功能暂不适合主线），现作为独立自用项目维护。
 
 ## 快速开始（桌面版）
 
@@ -52,8 +56,10 @@ EPUB 输出目录可在页面左侧边栏设置（输入路径，或点「选择
 ## 测试
 
 ```bash
-python -X utf8 test_rule_engine.py
+python -X utf8 "书源引擎插件/tests/test_book_source_engine.py" -v
 ```
+
+引擎源码与测试均位于 `书源引擎插件/`（`webserver/toolbox/book_source_engine/`）。
 
 ## 版权声明
 
