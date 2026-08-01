@@ -8,9 +8,6 @@
 - **MyBooks 插件版**：`书源引擎插件/` 目录为完整插件包（引擎 + Toolbox 工具 + 14 条 API 路由 + 管理页面），部署清单见该目录 README。
 - **桌面版**：零依赖本地 Web UI（书源管理 / 多源搜索 / EPUB 生成），可打包为单文件 exe。
 
-> 说明：本项目此前曾以 PR 提交至 [PoxenStudio/mybooks](https://github.com/PoxenStudio/mybooks)（PR #43），
-> 经与作者沟通后未合并（书源功能暂不适合主线），现作为独立自用项目维护。
-
 ## 快速开始（桌面版）
 
 ```bash
